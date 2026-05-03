@@ -6,9 +6,9 @@
     Sets Windows 11 default applications for file extensions and protocols.
 
 .DESCRIPTION
-    Reads a CSV configuration file listing file-extension-to-ProgID and
-    protocol-to-ProgID associations, verifies each ProgID exists in the
-    registry, and applies the defaults using SetUserFTA.
+    Reads a CSV configuration file listing file-extension-to-application and
+    protocol-to-application associations, resolves the corresponding ProgID in
+    the registry, and applies the defaults using SetUserFTA.
     SetUserFTA is resolved automatically: the cache path is checked first,
     then a download from the internet is attempted, then a copy from a
     network share. Results are logged to a logs\ subfolder next to the
@@ -16,7 +16,9 @@
 
 .PARAMETER ConfigPath
     Path to the CSV configuration file.
-    The file must have a header row with columns Association and ProgID.
+    The file must have a header row with columns Association and Application.
+    Application must match the registered application name shown by
+    get-application-associations.ps1 -ListApps.
     Lines starting with # are treated as comments and ignored.
     Defaults to default-applications.csv in the same directory as the script.
 
@@ -60,7 +62,7 @@
 
 .NOTES
     File:           set-default-applications.ps1
-    Version:        1.0.0
+    Version:        2.0.0
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
     License:        GPL-3.0-only
     Prerequisites:  PowerShell 5.1+; no administrator rights required
@@ -92,7 +94,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '1.0.0'
+$scriptVersion = '2.0.0'
 if ($Version) {
     Write-Host ('set-default-applications.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -231,19 +233,156 @@ function Resolve-SetUserFTA {
 
 <#
 .SYNOPSIS
-    Tests whether a ProgID is registered on this machine.
+    Resolves the full PowerShell registry path to an application's Capabilities subkey.
+    Handles both relative paths (Software\...) and absolute paths (HKEY_LOCAL_MACHINE\...).
+    Checks HKLM first, then HKCU.
 
-.PARAMETER ProgID
-    The ProgID to look up in HKLM or HKCU.
+.PARAMETER RawPath
+    The path value stored in RegisteredApplications. May be relative or include a full
+    HKEY_LOCAL_MACHINE / HKEY_CURRENT_USER prefix.
 #>
-function Test-ProgID {
+function Resolve-CapabilitiesPath {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true)]
-        [string]$ProgID
+        [string]$RawPath
     )
-    return (Test-Path ('HKLM:\SOFTWARE\Classes\{0}' -f $ProgID)) -or
-           (Test-Path ('HKCU:\SOFTWARE\Classes\{0}'  -f $ProgID))
+
+    $normalizedPath = $RawPath
+    if ($normalizedPath -match '^HKEY_LOCAL_MACHINE\\(.+)$') {
+        $normalizedPath = 'HKLM:\' + $Matches[1]
+    } elseif ($normalizedPath -match '^HKEY_CURRENT_USER\\(.+)$') {
+        $normalizedPath = 'HKCU:\' + $Matches[1]
+    }
+
+    if ($normalizedPath -match '^HK[A-Z]+:\\') {
+        if (Test-Path $normalizedPath) { return $normalizedPath }
+        $wow64Path = $normalizedPath -replace '^(HKLM:\\SOFTWARE\\)(?!WOW6432Node)', '$1WOW6432Node\\'
+        if ($wow64Path -ne $normalizedPath -and (Test-Path $wow64Path)) { return $wow64Path }
+        return $null
+    }
+
+    $hklmPath = 'HKLM:\' + $normalizedPath
+    if (Test-Path $hklmPath) { return $hklmPath }
+    $hkcuPath = 'HKCU:\' + $normalizedPath
+    if (Test-Path $hkcuPath) { return $hkcuPath }
+
+    if ($normalizedPath -match '^Software\\(.+)$') {
+        $wow64Path = 'HKLM:\SOFTWARE\WOW6432Node\' + $Matches[1]
+        if (Test-Path $wow64Path) { return $wow64Path }
+        $wow64PathHkcu = 'HKCU:\SOFTWARE\WOW6432Node\' + $Matches[1]
+        if (Test-Path $wow64PathHkcu) { return $wow64PathHkcu }
+    }
+
+    return $null
+}
+
+<#
+.SYNOPSIS
+    Returns an ordered hashtable of all value names and data from a registry key.
+
+.PARAMETER KeyPath
+    Full registry path to the key.
+#>
+function Get-RegistryValues {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$KeyPath
+    )
+
+    $key = Get-Item -Path $KeyPath -ErrorAction SilentlyContinue
+    if (-not $key) { return [ordered]@{} }
+
+    $result = [ordered]@{}
+    foreach ($name in $key.GetValueNames()) {
+        if ($name) {
+            $result[$name] = $key.GetValue($name)
+        }
+    }
+
+    return $result
+}
+
+<#
+.SYNOPSIS
+    Reads all registered application association declarations from the registry.
+
+.OUTPUTS
+    Hashtable keyed by application name. Each value contains FileAssociations and
+    URLAssociations hashtables.
+#>
+function Get-RegisteredApplicationAssociations {
+    [CmdletBinding()]
+    param()
+
+    $appsKey = Get-Item -Path 'HKLM:\SOFTWARE\RegisteredApplications' -ErrorAction SilentlyContinue
+    if (-not $appsKey) {
+        Write-ErrorLog 'HKLM:\SOFTWARE\RegisteredApplications not found.'
+        return @{}
+    }
+
+    $applications = @{}
+    foreach ($appName in ($appsKey.GetValueNames() | Where-Object { $_ } | Sort-Object)) {
+        $capabilitiesRawPath = $appsKey.GetValue($appName)
+        if (-not $capabilitiesRawPath) { continue }
+
+        $capabilitiesPath = Resolve-CapabilitiesPath -RawPath $capabilitiesRawPath
+        if (-not $capabilitiesPath) {
+            Write-Detail ('Skipping application ''{0}'': capabilities path not found.' -f $appName)
+            continue
+        }
+
+        $applications[$appName] = @{
+            FileAssociations = Get-RegistryValues -KeyPath (Join-Path $capabilitiesPath 'FileAssociations')
+            URLAssociations  = Get-RegistryValues -KeyPath (Join-Path $capabilitiesPath 'URLAssociations')
+        }
+    }
+
+    return $applications
+}
+
+<#
+.SYNOPSIS
+    Resolves the declared ProgID for a specific association of a registered application.
+
+.PARAMETER Association
+    File extension (for example .pdf) or protocol (for example http).
+
+.PARAMETER Application
+    Registered application name exactly as listed under RegisteredApplications.
+
+.PARAMETER ApplicationMap
+    Hashtable returned by Get-RegisteredApplicationAssociations.
+#>
+function Resolve-ProgIDForApplicationAssociation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Association,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Application,
+
+        [Parameter(Mandatory=$true)]
+        [hashtable]$ApplicationMap
+    )
+
+    if (-not $ApplicationMap.ContainsKey($Application)) {
+        return $null
+    }
+
+    $associationMap = if ($Association.StartsWith('.')) {
+        $ApplicationMap[$Application].FileAssociations
+    } else {
+        $ApplicationMap[$Application].URLAssociations
+    }
+
+    if ($associationMap.Contains($Association)) {
+        return $associationMap[$Association]
+    }
+
+    return $null
 }
 
 # ============================================================
@@ -273,6 +412,12 @@ if (-not $exePath -or -not (Test-Path $exePath)) {
 }
 Write-Info ('Using SetUserFTA: {0}' -f $exePath)
 
+$applicationMap = Get-RegisteredApplicationAssociations
+if ($applicationMap.Count -eq 0) {
+    Write-ErrorLog 'No registered applications could be resolved from the registry. Aborting.'
+    exit 1
+}
+
 # Read CSV, skipping comment and blank lines
 $csvLines = Get-Content $ConfigPath |
             Where-Object { $_ -notmatch '^\s*#' -and $_ -match '\S' }
@@ -295,19 +440,19 @@ $countError   = 0
 
 foreach ($row in $associations) {
     $association = $row.Association.Trim()
-    $progID      = $row.ProgID.Trim()
+    $application = $row.Application.Trim()
 
-    if (-not $association -or -not $progID) {
-        Write-Warn 'Skipping row with empty Association or ProgID.'
+    if (-not $association -or -not $application) {
+        Write-Warn 'Skipping row with empty Association or Application.'
         $countWarning++
         continue
     }
 
-    Write-Detail ('Processing: {0} -> {1}' -f $association, $progID)
+    $progID = Resolve-ProgIDForApplicationAssociation -Association $association -Application $application -ApplicationMap $applicationMap
+    Write-Detail ('Processing: {0} -> {1}' -f $association, $application)
 
-    # Verify ProgID exists in registry
-    if (-not (Test-ProgID -ProgID $progID)) {
-        Write-Warn ('ProgID ''{0}'' not found in registry — application may not be installed. Skipping ''{1}''.' -f $progID, $association)
+    if (-not $progID) {
+        Write-Warn ('Application ''{0}'' does not declare an association for ''{1}''. Skipping.' -f $application, $association)
         $countWarning++
         continue
     }
@@ -317,11 +462,11 @@ foreach ($row in $associations) {
     $exitCode = $LASTEXITCODE
 
     if ($exitCode -eq 0) {
-        Write-Success ('Set: {0} -> {1}' -f $association, $progID)
+        Write-Success ('Set: {0} -> {1} ({2})' -f $association, $application, $progID)
         $countSuccess++
     }
     else {
-        Write-ErrorLog ('Failed (exit code {0}): {1} -> {2}. Output: {3}' -f $exitCode, $association, $progID, ($output -join ' '))
+        Write-ErrorLog ('Failed (exit code {0}): {1} -> {2} ({3}). Output: {4}' -f $exitCode, $association, $application, $progID, ($output -join ' '))
         $countError++
     }
 }

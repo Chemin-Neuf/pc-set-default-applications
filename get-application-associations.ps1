@@ -24,17 +24,18 @@
 
 .PARAMETER App
     Name of a registered application exactly as returned by -ListApps.
-    Outputs objects with Type, Association, and ProgID properties for all file
-    extensions and URL protocols declared by that application.
+    Outputs objects with Type, Association, Application, and ProgID properties
+    for all file extensions and URL protocols declared by that application.
 
 .PARAMETER Category
     A perceived-type category name as returned by -ListCategories (e.g. video, audio).
-    Outputs objects with Association and ProgID properties for all extensions of
-    that type, using the system-registered default ProgID.
+    Outputs objects with Association, Application, and ProgID properties for all
+    extensions of that type, using the system-registered default ProgID.
 
 .PARAMETER ExportCsv
     Path to the CSV file to create. Valid only with -App or -Category.
     If the next unbound argument is Active or Commented, it is used as the export mode.
+    The exported file uses columns Association and Application.
     -ExportCsv output.csv writes commented rows by default for review.
     -ExportCsv output.csv Active writes active rows ready for immediate use.
     -ExportCsv output.csv Commented writes commented rows explicitly.
@@ -84,7 +85,7 @@
 
 .NOTES
     File:           get-application-associations.ps1
-    Version:        1.4.0
+    Version:        2.0.0
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
     License:        GPL-3.0-only
     Prerequisites:  PowerShell 5.1+; no administrator rights required
@@ -130,7 +131,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '1.4.0'
+$scriptVersion = '2.0.0'
 if ($Version) {
     Write-Host ('get-application-associations.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -248,10 +249,68 @@ function Get-RegistryValues {
 
 <#
 .SYNOPSIS
+    Finds the registered application name that declares a specific association/ProgID pair.
+
+.PARAMETER Association
+    File extension or protocol.
+
+.PARAMETER ProgID
+    Declared ProgID for the association.
+#>
+function Resolve-ApplicationNameForAssociation {
+    param(
+        [Parameter(Mandatory=$true)][string]$Association,
+        [Parameter(Mandatory=$true)][string]$ProgID
+    )
+
+    $appsKey = Get-Item -Path 'HKLM:\SOFTWARE\RegisteredApplications' -ErrorAction SilentlyContinue
+    if (-not $appsKey) { return '' }
+
+    foreach ($appName in ($appsKey.GetValueNames() | Where-Object { $_ } | Sort-Object)) {
+        $capRelPath = $appsKey.GetValue($appName)
+        if (-not $capRelPath) { continue }
+
+        $capPath = Resolve-CapabilitiesPath -RawPath $capRelPath
+        if (-not $capPath) { continue }
+
+        $associationPath = if ($Association.StartsWith('.')) {
+            Join-Path $capPath 'FileAssociations'
+        } else {
+            Join-Path $capPath 'URLAssociations'
+        }
+
+        $values = Get-RegistryValues -KeyPath $associationPath
+        if ($values.Contains($Association) -and $values[$Association] -eq $ProgID) {
+            return $appName
+        }
+    }
+
+    return ''
+}
+
+<#
+.SYNOPSIS
+    Escapes a value for CSV output when needed.
+
+.PARAMETER Value
+    Raw string value to escape.
+#>
+function Format-CsvValue {
+    param([AllowNull()][string]$Value)
+
+    if ($null -eq $Value) { return '' }
+    if ($Value -match '[",\r\n]') {
+        return '"{0}"' -f ($Value -replace '"', '""')
+    }
+    return $Value
+}
+
+<#
+.SYNOPSIS
     Writes Association and ProgID data to a CSV file compatible with set-default-applications.ps1.
 
 .PARAMETER Results
-    Collection of objects with Association and ProgID properties.
+    Collection of objects with Association and Application properties.
 
 .PARAMETER Path
     Destination file path (created or overwritten).
@@ -278,9 +337,9 @@ function Write-AssociationCsv {
     if (-not $Active) {
         $lines.Add('# Remove the leading # from each line you want to activate, then run set-default-applications.ps1.')
     }
-    $lines.Add('Association,ProgID')
+    $lines.Add('Association,Application')
     foreach ($item in ($Results | Sort-Object Association)) {
-        $lines.Add(('{0}{1},{2}' -f $prefix, $item.Association, $item.ProgID))
+        $lines.Add(('{0}{1},{2}' -f $prefix, (Format-CsvValue -Value $item.Association), (Format-CsvValue -Value $item.Application)))
     }
     [System.IO.File]::WriteAllLines($resolvedPath, $lines)
     Write-ConsoleInfo ('CSV written: {0}' -f $resolvedPath)
@@ -358,6 +417,7 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
             $results.Add([PSCustomObject]@{
                 Type        = 'Extension'
                 Association = $ext
+                Application = $App
                 ProgID      = $values[$ext]
             })
         }
@@ -374,6 +434,7 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
             $results.Add([PSCustomObject]@{
                 Type        = 'Protocol'
                 Association = $proto
+                Application = $App
                 ProgID      = $values[$proto]
             })
         }
@@ -409,9 +470,17 @@ if ($PSCmdlet.ParameterSetName -eq 'Category') {
             $perceivedType = $extKey.GetValue('PerceivedType')
             if ($perceivedType -eq $Category) {
                 $progID = $extKey.GetValue('')   # default value = system ProgID
+                $resolvedProgID = ''
+                $applicationName = ''
+                if ($progID) {
+                    $resolvedProgID = $progID
+                    $applicationName = Resolve-ApplicationNameForAssociation -Association $extKey.PSChildName -ProgID $resolvedProgID
+                }
+
                 $results.Add([PSCustomObject]@{
                     Association = $extKey.PSChildName
-                    ProgID      = if ($progID) { $progID } else { '' }
+                    Application = $applicationName
+                    ProgID      = $resolvedProgID
                 })
             }
         }

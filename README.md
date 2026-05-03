@@ -7,7 +7,7 @@ Restores Windows 11 default application associations (file extensions and protoc
 | File/Folder | Purpose |
 |---|---|
 | `set-default-applications.ps1` | Main script — resolves SetUserFTA and applies all associations |
-| `default-applications.csv` | Configuration: one row per extension or protocol with its target ProgID |
+| `default-applications.csv` | Configuration: one row per extension or protocol with its target application name |
 | `get-application-associations.ps1` | Discovery tool — queries the registry to find app names, categories, and ProgIDs |
 | `SharedUtils.psm1` | Shared logging utilities (synced from ps-shared-utils) |
 | `logs\` | Per-run log files (created automatically next to the script, or in %TEMP% as fallback) |
@@ -31,7 +31,7 @@ Restores Windows 11 default application associations (file extensions and protoc
 .\set-default-applications.ps1 -Verbosity Detailed
 ```
 
-Edit `default-applications.csv` to add your associations. Each uncommented row maps one file extension (`.pdf`) or protocol (`http`) to a ProgID. See the comments in the file for instructions on finding the correct ProgID for any application.
+Edit `default-applications.csv` to add your associations. Each uncommented row maps one file extension (`.pdf`) or protocol (`http`) to a registered application name such as `Windows Photo Viewer` or `VLC media player`. Spaces in names are fine; only quote a value if it contains a comma.
 
 ## License
 
