@@ -1,0 +1,8 @@
+# default-applications.txt
+# Ordered list of CSV files to import.
+# One CSV path per line.
+# Relative paths are resolved from this file's directory.
+# Lines starting with # are ignored.
+# If the same association appears in multiple files, the last one wins.
+
+default-applications.csv

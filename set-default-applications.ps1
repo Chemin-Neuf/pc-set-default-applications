@@ -8,19 +8,29 @@
 .DESCRIPTION
     Reads a CSV configuration file listing file-extension-to-application and
     protocol-to-application associations, resolves the corresponding ProgID in
-    the registry, and applies the defaults using SetUserFTA.
+    the registry, and applies the defaults using SetUserFTA. Configuration can
+    come either from one CSV file or from a TXT manifest listing multiple CSV
+    files in the exact order they should be processed.
     SetUserFTA is resolved automatically: the cache path is checked first,
     then a download from the internet is attempted, then a copy from a
     network share. Results are logged to a logs\ subfolder next to the
     script, with fallback to %TEMP%.
 
 .PARAMETER ConfigPath
-    Path to the CSV configuration file.
-    The file must have a header row with columns Association and Application.
-    Application must match the registered application name shown by
-    get-application-associations.ps1 -ListApps.
+    Path to the configuration input file.
+    When ConfigType is CSV, ConfigPath must point to one CSV file with columns
+    Association and Application.
+    When ConfigType is TXT, ConfigPath must point to a TXT manifest containing
+    one CSV path per line in processing order. Relative paths are resolved from
+    the manifest file's directory.
     Lines starting with # are treated as comments and ignored.
-    Defaults to default-applications.csv in the same directory as the script.
+    Defaults to default-applications.csv in the same directory as the script,
+    or default-applications.txt when ConfigType is TXT.
+
+.PARAMETER ConfigType
+    Type of the configuration input file.
+    CSV = one CSV file only.
+    TXT = a manifest file listing multiple CSV files in order.
 
 .PARAMETER SetUserFTAPath
     Optional path to an existing SetUserFTA.exe.
@@ -56,13 +66,18 @@
     Runs with a custom configuration file.
 
 .EXAMPLE
+    .\set-default-applications.ps1 -ConfigType TXT -ConfigPath ".\default-applications.txt"
+
+    Runs with a TXT manifest that lists multiple CSV files in order.
+
+.EXAMPLE
     .\set-default-applications.ps1 -Verbosity Detailed -LogVerbosity Normal
 
     Runs with full console output but reduced log verbosity.
 
 .NOTES
     File:           set-default-applications.ps1
-    Version:        2.0.0
+    Version:        2.1.0
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
     License:        GPL-3.0-only
     Prerequisites:  PowerShell 5.1+; no administrator rights required
@@ -72,6 +87,10 @@
 param(
     [Parameter()]
     [string]$ConfigPath = '',
+
+    [Parameter()]
+    [ValidateSet('CSV', 'TXT')]
+    [string]$ConfigType = 'CSV',
 
     [Parameter()]
     [string]$SetUserFTAPath = '',
@@ -94,7 +113,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '2.0.0'
+$scriptVersion = '2.1.0'
 if ($Version) {
     Write-Host ('set-default-applications.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -108,7 +127,12 @@ $setUserFTADownloadUrl = 'https://setuserfta.com/SetUserFTA.zip'
 $setUserFTANetworkPath = '\\your-server\your-share\SetUserFTA.exe'
 
 if (-not $ConfigPath) {
-    $ConfigPath = Join-Path $PSScriptRoot 'default-applications.csv'
+    if ($ConfigType -eq 'TXT') {
+        $ConfigPath = Join-Path $PSScriptRoot 'default-applications.txt'
+    }
+    else {
+        $ConfigPath = Join-Path $PSScriptRoot 'default-applications.csv'
+    }
 }
 
 # ============================================================
@@ -385,18 +409,144 @@ function Resolve-ProgIDForApplicationAssociation {
     return $null
 }
 
+<#
+.SYNOPSIS
+    Resolves the ordered list of CSV files to load from the selected config input.
+
+.PARAMETER ConfigPath
+    Path to either a CSV file or a TXT manifest.
+
+.PARAMETER ConfigType
+    Type of the configuration input file.
+#>
+function Resolve-ConfigCsvPaths {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ConfigPath,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('CSV', 'TXT')]
+        [string]$ConfigType
+    )
+
+    if (-not (Test-Path $ConfigPath)) {
+        Write-ErrorLog ('Config file not found: {0}' -f $ConfigPath)
+        return $null
+    }
+
+    $resolvedConfigPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ConfigPath)
+    $expectedExtension = if ($ConfigType -eq 'TXT') { '.txt' } else { '.csv' }
+    $actualExtension = [System.IO.Path]::GetExtension($resolvedConfigPath)
+
+    if ($actualExtension -ine $expectedExtension) {
+        Write-ErrorLog ('ConfigType {0} requires a {1} file, but got: {2}' -f $ConfigType, $expectedExtension, $resolvedConfigPath)
+        return $null
+    }
+
+    $csvPaths = [System.Collections.Generic.List[string]]::new()
+    if ($ConfigType -eq 'CSV') {
+        $csvPaths.Add($resolvedConfigPath)
+        return $csvPaths
+    }
+
+    $manifestDir = Split-Path $resolvedConfigPath -Parent
+    $manifestLines = Get-Content $resolvedConfigPath |
+        Where-Object { $_ -notmatch '^\s*#' -and $_ -match '\S' }
+
+    if (-not $manifestLines) {
+        return $csvPaths
+    }
+
+    foreach ($line in $manifestLines) {
+        $candidatePath = $line.Trim()
+        if (-not [System.IO.Path]::IsPathRooted($candidatePath)) {
+            $candidatePath = Join-Path $manifestDir $candidatePath
+        }
+
+        if ([System.IO.Path]::GetExtension($candidatePath) -ine '.csv') {
+            Write-ErrorLog ('Manifest entry is not a CSV file: {0}' -f $line.Trim())
+            return $null
+        }
+
+        if (-not (Test-Path $candidatePath)) {
+            Write-ErrorLog ('CSV file listed in manifest not found: {0}' -f $candidatePath)
+            return $null
+        }
+
+        $csvPaths.Add($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($candidatePath))
+    }
+
+    return $csvPaths
+}
+
+<#
+.SYNOPSIS
+    Loads association rows from one or more CSV files in order.
+
+.PARAMETER CsvPaths
+    Ordered list of CSV files to read.
+#>
+function Import-AssociationRows {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string[]]$CsvPaths
+    )
+
+    $rows = [System.Collections.Generic.List[PSObject]]::new()
+    foreach ($csvPath in $CsvPaths) {
+        Write-Info ('Loading CSV file: {0}' -f $csvPath)
+
+        $csvLines = Get-Content $csvPath |
+            Where-Object { $_ -notmatch '^\s*#' -and $_ -match '\S' }
+
+        if (-not $csvLines) {
+            Write-Detail ('Skipping empty CSV file: {0}' -f $csvPath)
+            continue
+        }
+
+        $csvRows = $csvLines | ConvertFrom-Csv
+        if (-not $csvRows) {
+            Write-Detail ('No association rows found in CSV file: {0}' -f $csvPath)
+            continue
+        }
+
+        $propertyNames = $csvRows[0].PSObject.Properties.Name
+        if (('Association' -notin $propertyNames) -or ('Application' -notin $propertyNames)) {
+            Write-ErrorLog ('CSV file must contain Association and Application columns: {0}' -f $csvPath)
+            return $null
+        }
+
+        foreach ($csvRow in $csvRows) {
+            $rows.Add([PSCustomObject]@{
+                Association = $csvRow.Association
+                Application = $csvRow.Application
+                SourcePath  = $csvPath
+            })
+        }
+    }
+
+    return $rows
+}
+
 # ============================================================
 # MAIN
 # ============================================================
 Write-Info ('set-default-applications.ps1 v{0} starting' -f $scriptVersion)
 Write-Detail ('Log file: {0}' -f $Global:LogFile)
 
-# Validate config file
-if (-not (Test-Path $ConfigPath)) {
-    Write-ErrorLog ('Config file not found: {0}' -f $ConfigPath)
+$csvPaths = Resolve-ConfigCsvPaths -ConfigPath $ConfigPath -ConfigType $ConfigType
+if ($null -eq $csvPaths) {
     exit 1
 }
-Write-Info ('Using config file: {0}' -f $ConfigPath)
+
+if ($csvPaths.Count -eq 0) {
+    Write-Warn ('No CSV files found in config input: {0}' -f $ConfigPath)
+    exit 0
+}
+
+Write-Info ('Using config input: {0} ({1})' -f $ConfigPath, $ConfigType)
 
 # Resolve SetUserFTA
 $exePath = $SetUserFTAPath
@@ -418,19 +568,13 @@ if ($applicationMap.Count -eq 0) {
     exit 1
 }
 
-# Read CSV, skipping comment and blank lines
-$csvLines = Get-Content $ConfigPath |
-            Where-Object { $_ -notmatch '^\s*#' -and $_ -match '\S' }
-
-if (-not $csvLines) {
-    Write-Warn 'No content found in config file after filtering comments. Nothing to do.'
-    exit 0
+$associations = Import-AssociationRows -CsvPaths $csvPaths
+if ($null -eq $associations) {
+    exit 1
 }
 
-$associations = $csvLines | ConvertFrom-Csv
-
-if (-not $associations) {
-    Write-Warn 'No associations found in config file. Nothing to do.'
+if (-not $associations -or $associations.Count -eq 0) {
+    Write-Warn 'No associations found in the selected config input. Nothing to do.'
     exit 0
 }
 
