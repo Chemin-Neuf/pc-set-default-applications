@@ -15,7 +15,8 @@
     write a CSV file ready for use with set-default-applications.ps1.
 
 .PARAMETER ListApps
-    Lists all application names registered under HKLM:\SOFTWARE\RegisteredApplications.
+    Lists all application names registered under RegisteredApplications for the
+    current user and the local machine.
     These names can be used as input to -App.
 
 .PARAMETER ListCategories
@@ -95,8 +96,9 @@
 
 .NOTES
     File:           get-application-associations.ps1
-    Version:        2.2.2
+    Version:        2.2.3
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
+    Major Contributors: GPT-5.4 (GitHub Copilot)
     License:        GPL-3.0-only
     Prerequisites:  PowerShell 5.1+; no administrator rights required
 #>
@@ -146,7 +148,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '2.2.2'
+$scriptVersion = '2.2.3'
 if ($Version) {
     Write-Host ('get-application-associations.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -258,6 +260,36 @@ function Get-RegistryValues {
 
 <#
 .SYNOPSIS
+    Returns all RegisteredApplications entries visible to this user.
+
+.DESCRIPTION
+    Combines per-user and machine-wide registrations. User-scoped entries are
+    preferred when the same application name exists in multiple hives.
+#>
+function Get-RegisteredApplications {
+    $registeredApplications = [ordered]@{}
+    $registeredApplicationPaths = @(
+        'HKCU:\SOFTWARE\RegisteredApplications',
+        'HKCU:\SOFTWARE\WOW6432Node\RegisteredApplications',
+        'HKLM:\SOFTWARE\RegisteredApplications',
+        'HKLM:\SOFTWARE\WOW6432Node\RegisteredApplications'
+    )
+
+    foreach ($registeredApplicationPath in $registeredApplicationPaths) {
+        $appsKey = Get-Item -Path $registeredApplicationPath -ErrorAction SilentlyContinue
+        if (-not $appsKey) { continue }
+
+        foreach ($appName in ($appsKey.GetValueNames() | Where-Object { $_ } | Sort-Object)) {
+            if ($registeredApplications.Contains($appName)) { continue }
+            $registeredApplications[$appName] = $appsKey.GetValue($appName)
+        }
+    }
+
+    return $registeredApplications
+}
+
+<#
+.SYNOPSIS
     Finds the registered application name that declares a specific association/ProgID pair.
 
 .PARAMETER Association
@@ -272,11 +304,11 @@ function Resolve-ApplicationNameForAssociation {
         [Parameter(Mandatory=$true)][string]$ProgID
     )
 
-    $appsKey = Get-Item -Path 'HKLM:\SOFTWARE\RegisteredApplications' -ErrorAction SilentlyContinue
-    if (-not $appsKey) { return '' }
+    $registeredApplications = Get-RegisteredApplications
+    if ($registeredApplications.Count -eq 0) { return '' }
 
-    foreach ($appName in ($appsKey.GetValueNames() | Where-Object { $_ } | Sort-Object)) {
-        $capRelPath = $appsKey.GetValue($appName)
+    foreach ($appName in ($registeredApplications.Keys | Sort-Object)) {
+        $capRelPath = $registeredApplications[$appName]
         if (-not $capRelPath) { continue }
 
         $capPath = Resolve-CapabilitiesPath -RawPath $capRelPath
@@ -367,12 +399,8 @@ function Write-AssociationCsv {
 # MODE: LIST APPS
 # ============================================================
 if ($PSCmdlet.ParameterSetName -eq 'ListApps') {
-    $regKey = Get-Item -Path 'HKLM:\SOFTWARE\RegisteredApplications' -ErrorAction SilentlyContinue
-    if (-not $regKey) {
-        Write-Error 'HKLM:\SOFTWARE\RegisteredApplications not found.'
-        exit 1
-    }
-    $names = $regKey.GetValueNames() | Where-Object { $_ } | Sort-Object
+    $registeredApplications = Get-RegisteredApplications
+    $names = $registeredApplications.Keys | Sort-Object
     if (-not $names) {
         Write-Warning 'No registered applications found.'
         exit 0
@@ -405,13 +433,13 @@ if ($PSCmdlet.ParameterSetName -eq 'ListCategories') {
 # MODE: APP
 # ============================================================
 if ($PSCmdlet.ParameterSetName -eq 'App') {
-    $appsKey = Get-Item -Path 'HKLM:\SOFTWARE\RegisteredApplications' -ErrorAction SilentlyContinue
-    if (-not $appsKey) {
-        Write-Error 'HKLM:\SOFTWARE\RegisteredApplications not found.'
+    $registeredApplications = Get-RegisteredApplications
+    if ($registeredApplications.Count -eq 0) {
+        Write-Error 'No registered applications found.'
         exit 1
     }
 
-    $capRelPath = $appsKey.GetValue($App)
+    $capRelPath = $registeredApplications[$App]
     if (-not $capRelPath) {
         Write-Error ('Application not found: {0}' -f $App)
         Write-ConsoleInfo 'Run with -ListApps to see available application names.'

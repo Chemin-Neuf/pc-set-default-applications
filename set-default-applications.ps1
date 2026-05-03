@@ -79,8 +79,9 @@
 
 .NOTES
     File:           set-default-applications.ps1
-    Version:        2.1.1
+    Version:        2.1.2
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
+    Major Contributors: GPT-5.4 (GitHub Copilot)
     License:        GPL-3.0-only
     Prerequisites:  PowerShell 5.1+; no administrator rights required
 #>
@@ -115,7 +116,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '2.1.1'
+$scriptVersion = '2.1.2'
 if ($Version) {
     Write-Host ('set-default-applications.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -332,6 +333,39 @@ function Get-RegistryValues {
 
 <#
 .SYNOPSIS
+    Returns all RegisteredApplications entries visible to this user.
+
+.DESCRIPTION
+    Combines per-user and machine-wide registrations. User-scoped entries are
+    preferred when the same application name exists in multiple hives.
+#>
+function Get-RegisteredApplications {
+    [CmdletBinding()]
+    param()
+
+    $registeredApplications = [ordered]@{}
+    $registeredApplicationPaths = @(
+        'HKCU:\SOFTWARE\RegisteredApplications',
+        'HKCU:\SOFTWARE\WOW6432Node\RegisteredApplications',
+        'HKLM:\SOFTWARE\RegisteredApplications',
+        'HKLM:\SOFTWARE\WOW6432Node\RegisteredApplications'
+    )
+
+    foreach ($registeredApplicationPath in $registeredApplicationPaths) {
+        $appsKey = Get-Item -Path $registeredApplicationPath -ErrorAction SilentlyContinue
+        if (-not $appsKey) { continue }
+
+        foreach ($appName in ($appsKey.GetValueNames() | Where-Object { $_ } | Sort-Object)) {
+            if ($registeredApplications.Contains($appName)) { continue }
+            $registeredApplications[$appName] = $appsKey.GetValue($appName)
+        }
+    }
+
+    return $registeredApplications
+}
+
+<#
+.SYNOPSIS
     Reads all registered application association declarations from the registry.
 
 .OUTPUTS
@@ -342,15 +376,15 @@ function Get-RegisteredApplicationAssociations {
     [CmdletBinding()]
     param()
 
-    $appsKey = Get-Item -Path 'HKLM:\SOFTWARE\RegisteredApplications' -ErrorAction SilentlyContinue
-    if (-not $appsKey) {
-        Write-ErrorLog 'HKLM:\SOFTWARE\RegisteredApplications not found.'
+    $registeredApplications = Get-RegisteredApplications
+    if ($registeredApplications.Count -eq 0) {
+        Write-ErrorLog 'RegisteredApplications not found in HKCU or HKLM.'
         return @{}
     }
 
     $applications = @{}
-    foreach ($appName in ($appsKey.GetValueNames() | Where-Object { $_ } | Sort-Object)) {
-        $capabilitiesRawPath = $appsKey.GetValue($appName)
+    foreach ($appName in ($registeredApplications.Keys | Sort-Object)) {
+        $capabilitiesRawPath = $registeredApplications[$appName]
         if (-not $capabilitiesRawPath) { continue }
 
         $capabilitiesPath = Resolve-CapabilitiesPath -RawPath $capabilitiesRawPath
