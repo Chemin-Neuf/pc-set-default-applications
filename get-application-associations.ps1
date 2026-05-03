@@ -41,6 +41,10 @@
     Controls whether exported rows are written as Active or Commented.
     Default: Commented.
 
+.PARAMETER OverwriteCsv
+    Allows overwriting an existing export file.
+    Default: disabled. If the target file already exists, export stops with an error.
+
 .PARAMETER Verbosity
     Controls console output level: None, Normal, or Detailed (default: Normal).
 
@@ -80,13 +84,18 @@
     Exports VLC associations with all rows active, ready to apply immediately.
 
 .EXAMPLE
+    .\get-application-associations.ps1 -App "VLC media player" -ExportCsv vlc.csv -OverwriteCsv
+
+    Overwrites an existing vlc.csv export file.
+
+.EXAMPLE
     .\get-application-associations.ps1 -Category video -ExportCsv video-defaults.csv
 
     Exports all video extensions with rows commented out for review before enabling.
 
 .NOTES
     File:           get-application-associations.ps1
-    Version:        2.1.0
+    Version:        2.2.2
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
     License:        GPL-3.0-only
     Prerequisites:  PowerShell 5.1+; no administrator rights required
@@ -115,6 +124,10 @@ param(
     [ValidateSet('Active', 'Commented')]
     [string]$ExportCsvMode = 'Commented',
 
+    [Parameter(ParameterSetName = 'App')]
+    [Parameter(ParameterSetName = 'Category')]
+    [switch]$OverwriteCsv,
+
     [Parameter()]
     [ValidateSet('None', 'Normal', 'Detailed')]
     [string]$Verbosity = 'Normal',
@@ -133,7 +146,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '2.1.0'
+$scriptVersion = '2.2.2'
 if ($Version) {
     Write-Host ('get-application-associations.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -168,6 +181,15 @@ function Write-ConsoleDetail {
     if ($Verbosity -eq 'Detailed') {
         Write-Host ('    [detail] {0}' -f $Message) -ForegroundColor DarkGray
     }
+}
+
+<#
+.SYNOPSIS
+    Writes an error message to the console.
+#>
+function Write-ConsoleError {
+    param([Parameter(Mandatory=$true)][string]$Message)
+    Write-Host $Message -ForegroundColor Red
 }
 
 <#
@@ -300,23 +322,31 @@ function Format-CsvValue {
     Collection of objects with Association and Application properties.
 
 .PARAMETER Path
-    Destination file path (created or overwritten).
+    Destination file path.
 
 .PARAMETER Active
     When set, rows are written without a leading # (immediately active).
     Default is to prefix each row with # for review.
+
+.PARAMETER Overwrite
+    Allows overwriting the destination file when it already exists.
 #>
 function Write-AssociationCsv {
     param(
         [Parameter(Mandatory=$true)]$Results,
         [Parameter(Mandatory=$true)][string]$Path,
-        [switch]$Active
+        [switch]$Active,
+        [switch]$Overwrite
     )
     $resolvedPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
     $parentDir = [System.IO.Path]::GetDirectoryName($resolvedPath)
     if ($parentDir -and -not (Test-Path $parentDir)) {
-        Write-Error ('Output directory does not exist: {0}' -f $parentDir)
-        return
+        Write-ConsoleError ('Output directory does not exist: {0}' -f $parentDir)
+        return $false
+    }
+    if ((Test-Path $resolvedPath) -and -not $Overwrite) {
+        Write-ConsoleError ('Output file already exists: {0}. Use -OverwriteCsv to replace it.' -f $resolvedPath)
+        return $false
     }
     $prefix = if ($Active) { '' } else { '#' }
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -330,6 +360,7 @@ function Write-AssociationCsv {
     }
     [System.IO.File]::WriteAllLines($resolvedPath, $lines)
     Write-ConsoleInfo ('CSV written: {0}' -f $resolvedPath)
+    return $true
 }
 
 # ============================================================
@@ -440,7 +471,10 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
         $results | Sort-Object Type, Association | Format-Table -AutoSize | Out-String | Write-Host
     }
     $results | Sort-Object Type, Association | Write-Output
-    if ($exportCsvPath) { Write-AssociationCsv -Results $results -Path $exportCsvPath -Active:($exportCsvMode -eq 'Active') }
+    if ($exportCsvPath) {
+        $exportSucceeded = Write-AssociationCsv -Results $results -Path $exportCsvPath -Active:($exportCsvMode -eq 'Active') -Overwrite:$OverwriteCsv
+        if (-not $exportSucceeded) { exit 1 }
+    }
     exit 0
 }
 
@@ -483,6 +517,9 @@ if ($PSCmdlet.ParameterSetName -eq 'Category') {
         $results | Sort-Object Association | Format-Table -AutoSize | Out-String | Write-Host
     }
     $results | Sort-Object Association | Write-Output
-    if ($exportCsvPath) { Write-AssociationCsv -Results $results -Path $exportCsvPath -Active:($exportCsvMode -eq 'Active') }
+    if ($exportCsvPath) {
+        $exportSucceeded = Write-AssociationCsv -Results $results -Path $exportCsvPath -Active:($exportCsvMode -eq 'Active') -Overwrite:$OverwriteCsv
+        if (-not $exportSucceeded) { exit 1 }
+    }
     exit 0
 }

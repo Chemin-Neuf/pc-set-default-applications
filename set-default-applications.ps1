@@ -77,7 +77,7 @@
 
 .NOTES
     File:           set-default-applications.ps1
-    Version:        2.1.0
+    Version:        2.1.1
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
     License:        GPL-3.0-only
     Prerequisites:  PowerShell 5.1+; no administrator rights required
@@ -113,7 +113,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '2.1.0'
+$scriptVersion = '2.1.1'
 if ($Version) {
     Write-Host ('set-default-applications.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -586,8 +586,14 @@ foreach ($row in $associations) {
     $association = $row.Association.Trim()
     $application = $row.Application.Trim()
 
-    if (-not $association -or -not $application) {
-        Write-Warn 'Skipping row with empty Association or Application.'
+    if (-not $association) {
+        Write-Warn ('Skipping row from ''{0}'' because Association is empty.' -f $row.SourcePath)
+        $countWarning++
+        continue
+    }
+
+    if (-not $application) {
+        Write-Warn ('Skipping ''{0}'' from ''{1}'' because no application is specified.' -f $association, $row.SourcePath)
         $countWarning++
         continue
     }
