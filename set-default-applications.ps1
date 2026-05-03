@@ -22,7 +22,9 @@
     Association and Application.
     When ConfigType is TXT, ConfigPath must point to a TXT manifest containing
     one CSV path per line in processing order. Relative paths are resolved from
-    the manifest file's directory.
+    the manifest file's directory. For example, relative.csv resolves next to
+    the manifest, ..\parent.csv resolves from the manifest's parent, and
+    absolute paths are used unchanged.
     Lines starting with # are treated as comments and ignored.
     Defaults to default-applications.csv in the same directory as the script,
     or default-applications.txt when ConfigType is TXT.

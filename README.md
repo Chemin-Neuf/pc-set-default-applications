@@ -35,7 +35,7 @@ Restores Windows 11 default application associations (file extensions and protoc
 .\set-default-applications.ps1 -Verbosity Detailed
 ```
 
-Edit `default-applications.csv` to add your associations. Each uncommented row maps one file extension (`.pdf`) or protocol (`http`) to a registered application name such as `Windows Photo Viewer` or `VLC media player`. Spaces in names are fine; only quote a value if it contains a comma. If you want to split the configuration into several CSV files, list them in `default-applications.txt` in the exact order they should be applied; later files win when the same association appears more than once.
+Edit `default-applications.csv` to add your associations. Each uncommented row maps one file extension (`.pdf`) or protocol (`http`) to a registered application name such as `Windows Photo Viewer` or `VLC media player`. Spaces in names are fine; only quote a value if it contains a comma. If you want to split the configuration into several CSV files, list them in `default-applications.txt` in the exact order they should be applied; later files win when the same association appears more than once. In a TXT manifest, relative CSV paths are resolved from the manifest file's directory, while absolute paths are kept as-is.
 
 ## License
 
