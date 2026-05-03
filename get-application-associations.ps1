@@ -34,11 +34,12 @@
 
 .PARAMETER ExportCsv
     Path to the CSV file to create. Valid only with -App or -Category.
-    If the next unbound argument is Active or Commented, it is used as the export mode.
     The exported file uses columns Association and Application.
-    -ExportCsv output.csv writes commented rows by default for review.
-    -ExportCsv output.csv Active writes active rows ready for immediate use.
-    -ExportCsv output.csv Commented writes commented rows explicitly.
+    Use ExportCsvMode to control whether the exported rows are active or commented.
+
+.PARAMETER ExportCsvMode
+    Controls whether exported rows are written as Active or Commented.
+    Default: Commented.
 
 .PARAMETER Verbosity
     Controls console output level: None, Normal, or Detailed (default: Normal).
@@ -74,7 +75,7 @@
     Exports VLC associations with all rows commented out for review.
 
 .EXAMPLE
-    .\get-application-associations.ps1 -App "VLC media player" -ExportCsv vlc.csv Active
+    .\get-application-associations.ps1 -App "VLC media player" -ExportCsv vlc.csv -ExportCsvMode Active
 
     Exports VLC associations with all rows active, ready to apply immediately.
 
@@ -85,7 +86,7 @@
 
 .NOTES
     File:           get-application-associations.ps1
-    Version:        2.0.0
+    Version:        2.1.0
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
     License:        GPL-3.0-only
     Prerequisites:  PowerShell 5.1+; no administrator rights required
@@ -109,9 +110,10 @@ param(
     [Parameter(ParameterSetName = 'Category')]
     [string]$ExportCsv,
 
-    [Parameter(ParameterSetName = 'App', ValueFromRemainingArguments = $true)]
-    [Parameter(ParameterSetName = 'Category', ValueFromRemainingArguments = $true)]
-    [string[]]$RemainingArguments,
+    [Parameter(ParameterSetName = 'App')]
+    [Parameter(ParameterSetName = 'Category')]
+    [ValidateSet('Active', 'Commented')]
+    [string]$ExportCsvMode = 'Commented',
 
     [Parameter()]
     [ValidateSet('None', 'Normal', 'Detailed')]
@@ -131,7 +133,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '2.0.0'
+$scriptVersion = '2.1.0'
 if ($Version) {
     Write-Host ('get-application-associations.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -140,23 +142,8 @@ if ($Version) {
 if ($Quiet) { $Verbosity = 'None' }
 
 $exportCsvPath = $null
-$exportCsvMode = 'Commented'
 if ($ExportCsv) {
     $exportCsvPath = $ExportCsv
-
-    if ($RemainingArguments.Count -ge 1) {
-        $exportCsvMode = $RemainingArguments[0]
-    }
-
-    if ($exportCsvMode -notin @('Active', 'Commented')) {
-        throw ('Invalid ExportCsv mode: {0}. Valid values are Active or Commented.' -f $exportCsvMode)
-    }
-
-    if ($RemainingArguments.Count -gt 1) {
-        throw ('Too many arguments after -ExportCsv. Use: -ExportCsv <Path> [Active|Commented]')
-    }
-} elseif ($RemainingArguments.Count -gt 0) {
-    throw ('Unexpected positional argument(s): {0}' -f ($RemainingArguments -join ', '))
 }
 
 # ============================================================
