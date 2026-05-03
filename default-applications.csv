@@ -1,0 +1,27 @@
+# default-applications.csv
+# One row per association. Association is a file extension (e.g. .pdf) or
+# a protocol (e.g. http, https). ProgID must be registered on the target machine.
+#
+# To find the ProgID for an application:
+#   1. Set the default manually in Windows Settings
+#   2. Run in PowerShell: Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.EXT\UserChoice"
+#      and read the ProgId value.
+#   Or use: HKEY_CURRENT_USER\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\PROTOCOL\UserChoice
+#
+# Lines starting with # are ignored.
+# Blank lines are ignored.
+Association,ProgID
+# --- Web browser ---
+#http,ChromeHTML
+#https,ChromeHTML
+# --- PDF ---
+#.pdf,AcroExch.Document.DC
+# --- Images ---
+#.jpg,PhotoViewer.FileAssoc.Tiff
+#.jpeg,PhotoViewer.FileAssoc.Tiff
+#.png,PhotoViewer.FileAssoc.Tiff
+# --- Video ---
+#.mp4,VLC.mp4
+#.mkv,VLC.mkv
+# --- Audio ---
+#.mp3,VLC.mp3
