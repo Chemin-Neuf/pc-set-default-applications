@@ -8,6 +8,7 @@ Restores Windows 11 default application associations (file extensions and protoc
 |---|---|
 | `set-default-applications.ps1` | Main script — resolves SetUserFTA and applies all associations |
 | `default-applications.csv` | Configuration: one row per extension or protocol with its target ProgID |
+| `get-application-associations.ps1` | Discovery tool — queries the registry to find app names, categories, and ProgIDs |
 | `SharedUtils.psm1` | Shared logging utilities (synced from ps-shared-utils) |
 | `logs\` | Per-run log files (created automatically next to the script, or in %TEMP% as fallback) |
 
