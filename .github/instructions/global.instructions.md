@@ -1,6 +1,7 @@
 ---
 applyTo: "**"
 ---
+<!-- AUTO-SYNCED from github.com/Chemin-Neuf/dev-standards DO NOT EDIT HERE — edit in dev-standards and re-sync -->
 <!--
   Chemin-Neuf dev-standards — global rules
   Last Updated: 2026-05-03
