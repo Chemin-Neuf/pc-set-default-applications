@@ -139,18 +139,47 @@ function Write-ConsoleDetail {
 
 <#
 .SYNOPSIS
-    Resolves the full registry path to an application's Capabilities subkey.
+    Resolves the full PowerShell registry path to an application's Capabilities subkey.
+    Handles both relative paths (Software\...) and absolute paths (HKEY_LOCAL_MACHINE\...).
     Checks HKLM first, then HKCU.
 
-.PARAMETER RelativePath
-    The relative path stored in RegisteredApplications (no hive prefix).
+.PARAMETER RawPath
+    The path value stored in RegisteredApplications. May be relative or include a full
+    HKEY_LOCAL_MACHINE / HKEY_CURRENT_USER prefix.
 #>
 function Resolve-CapabilitiesPath {
-    param([Parameter(Mandatory=$true)][string]$RelativePath)
-    $hklmPath = 'HKLM:\' + $RelativePath
+    param([Parameter(Mandatory=$true)][string]$RawPath)
+
+    # Normalize full HKEY_ prefixes to PowerShell drive notation
+    $normalizedPath = $RawPath
+    if ($normalizedPath -match '^HKEY_LOCAL_MACHINE\\(.+)$') {
+        $normalizedPath = 'HKLM:\' + $Matches[1]
+    } elseif ($normalizedPath -match '^HKEY_CURRENT_USER\\(.+)$') {
+        $normalizedPath = 'HKCU:\' + $Matches[1]
+    }
+
+    # Already has a PS drive prefix
+    if ($normalizedPath -match '^HK[A-Z]+:\\') {
+        if (Test-Path $normalizedPath) { return $normalizedPath }
+        # WOW6432Node fallback for fully-qualified paths
+        $wow64 = $normalizedPath -replace '^(HKLM:\\SOFTWARE\\)(?!WOW6432Node)', '$1WOW6432Node\'
+        if ($wow64 -ne $normalizedPath -and (Test-Path $wow64)) { return $wow64 }
+        return $null
+    }
+
+    # Treat as relative — try HKLM then HKCU, with WOW6432Node fallback for 32-bit apps
+    $hklmPath = 'HKLM:\' + $normalizedPath
     if (Test-Path $hklmPath) { return $hklmPath }
-    $hkcuPath = 'HKCU:\' + $RelativePath
+    $hkcuPath = 'HKCU:\' + $normalizedPath
     if (Test-Path $hkcuPath) { return $hkcuPath }
+
+    # 32-bit apps on 64-bit Windows are redirected to WOW6432Node
+    if ($normalizedPath -match '^Software\\(.+)$') {
+        $wow64Path = 'HKLM:\SOFTWARE\WOW6432Node\' + $Matches[1]
+        if (Test-Path $wow64Path) { return $wow64Path }
+        $wow64PathHkcu = 'HKCU:\SOFTWARE\WOW6432Node\' + $Matches[1]
+        if (Test-Path $wow64PathHkcu) { return $wow64PathHkcu }
+    }
     return $null
 }
 
@@ -228,9 +257,9 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
     }
     Write-ConsoleDetail ('Capabilities subkey: {0}' -f $capRelPath)
 
-    $capPath = Resolve-CapabilitiesPath -RelativePath $capRelPath
+    $capPath = Resolve-CapabilitiesPath -RawPath $capRelPath
     if (-not $capPath) {
-        Write-Error ('Capabilities registry key not accessible for: {0}' -f $App)
+        Write-Error ('Capabilities registry key not found for: {0}{1}  Raw path from registry: {2}' -f $App, [Environment]::NewLine, $capRelPath)
         exit 1
     }
 
