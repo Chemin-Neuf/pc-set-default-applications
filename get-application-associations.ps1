@@ -11,8 +11,8 @@
     -ListCategories lists all distinct PerceivedType values found on this machine.
     -App shows all file and URL associations declared by a specific application.
     -Category shows all extensions of a given perceived type with their ProgIDs.
-    No changes are made to the system. Output from -App and -Category can be
-    piped to Export-Csv for direct use with default-applications.csv.
+    No changes are made to the system. Use -ExportCsv with -App or -Category to
+    write a CSV file ready for use with set-default-applications.ps1.
 
 .PARAMETER ListApps
     Lists all application names registered under HKLM:\SOFTWARE\RegisteredApplications.
@@ -31,6 +31,13 @@
     A perceived-type category name as returned by -ListCategories (e.g. video, audio).
     Outputs objects with Association and ProgID properties for all extensions of
     that type, using the system-registered default ProgID.
+
+.PARAMETER ExportCsv
+    Path to the CSV file to create. Valid only with -App or -Category.
+    If the next unbound argument is Active or Commented, it is used as the export mode.
+    -ExportCsv output.csv writes commented rows by default for review.
+    -ExportCsv output.csv Active writes active rows ready for immediate use.
+    -ExportCsv output.csv Commented writes commented rows explicitly.
 
 .PARAMETER Verbosity
     Controls console output level: None, Normal, or Detailed (default: Normal).
@@ -61,13 +68,23 @@
     Shows all file and URL associations declared by VLC with their ProgIDs.
 
 .EXAMPLE
-    .\get-application-associations.ps1 -Category video | Export-Csv -Path video.csv -NoTypeInformation
+    .\get-application-associations.ps1 -App "VLC media player" -ExportCsv vlc.csv
 
-    Exports all video extensions and their system ProgIDs to a CSV file.
+    Exports VLC associations with all rows commented out for review.
+
+.EXAMPLE
+    .\get-application-associations.ps1 -App "VLC media player" -ExportCsv vlc.csv Active
+
+    Exports VLC associations with all rows active, ready to apply immediately.
+
+.EXAMPLE
+    .\get-application-associations.ps1 -Category video -ExportCsv video-defaults.csv
+
+    Exports all video extensions with rows commented out for review before enabling.
 
 .NOTES
     File:           get-application-associations.ps1
-    Version:        1.0.0
+    Version:        1.4.0
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
     License:        GPL-3.0-only
     Prerequisites:  PowerShell 5.1+; no administrator rights required
@@ -87,6 +104,14 @@ param(
     [Parameter(ParameterSetName = 'Category', Mandatory = $true)]
     [string]$Category,
 
+    [Parameter(ParameterSetName = 'App')]
+    [Parameter(ParameterSetName = 'Category')]
+    [string]$ExportCsv,
+
+    [Parameter(ParameterSetName = 'App', ValueFromRemainingArguments = $true)]
+    [Parameter(ParameterSetName = 'Category', ValueFromRemainingArguments = $true)]
+    [string[]]$RemainingArguments,
+
     [Parameter()]
     [ValidateSet('None', 'Normal', 'Detailed')]
     [string]$Verbosity = 'Normal',
@@ -105,13 +130,33 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '1.0.0'
+$scriptVersion = '1.4.0'
 if ($Version) {
     Write-Host ('get-application-associations.ps1  v{0}' -f $scriptVersion)
     exit 0
 }
 
 if ($Quiet) { $Verbosity = 'None' }
+
+$exportCsvPath = $null
+$exportCsvMode = 'Commented'
+if ($ExportCsv) {
+    $exportCsvPath = $ExportCsv
+
+    if ($RemainingArguments.Count -ge 1) {
+        $exportCsvMode = $RemainingArguments[0]
+    }
+
+    if ($exportCsvMode -notin @('Active', 'Commented')) {
+        throw ('Invalid ExportCsv mode: {0}. Valid values are Active or Commented.' -f $exportCsvMode)
+    }
+
+    if ($RemainingArguments.Count -gt 1) {
+        throw ('Too many arguments after -ExportCsv. Use: -ExportCsv <Path> [Active|Commented]')
+    }
+} elseif ($RemainingArguments.Count -gt 0) {
+    throw ('Unexpected positional argument(s): {0}' -f ($RemainingArguments -join ', '))
+}
 
 # ============================================================
 # HELPERS
@@ -199,6 +244,46 @@ function Get-RegistryValues {
         if ($name) { $result[$name] = $key.GetValue($name) }
     }
     return $result
+}
+
+<#
+.SYNOPSIS
+    Writes Association and ProgID data to a CSV file compatible with set-default-applications.ps1.
+
+.PARAMETER Results
+    Collection of objects with Association and ProgID properties.
+
+.PARAMETER Path
+    Destination file path (created or overwritten).
+
+.PARAMETER Active
+    When set, rows are written without a leading # (immediately active).
+    Default is to prefix each row with # for review.
+#>
+function Write-AssociationCsv {
+    param(
+        [Parameter(Mandatory=$true)]$Results,
+        [Parameter(Mandatory=$true)][string]$Path,
+        [switch]$Active
+    )
+    $resolvedPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    $parentDir = [System.IO.Path]::GetDirectoryName($resolvedPath)
+    if ($parentDir -and -not (Test-Path $parentDir)) {
+        Write-Error ('Output directory does not exist: {0}' -f $parentDir)
+        return
+    }
+    $prefix = if ($Active) { '' } else { '#' }
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add(('# Generated by get-application-associations.ps1 on {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')))
+    if (-not $Active) {
+        $lines.Add('# Remove the leading # from each line you want to activate, then run set-default-applications.ps1.')
+    }
+    $lines.Add('Association,ProgID')
+    foreach ($item in ($Results | Sort-Object Association)) {
+        $lines.Add(('{0}{1},{2}' -f $prefix, $item.Association, $item.ProgID))
+    }
+    [System.IO.File]::WriteAllLines($resolvedPath, $lines)
+    Write-ConsoleInfo ('CSV written: {0}' -f $resolvedPath)
 }
 
 # ============================================================
@@ -303,7 +388,11 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
     }
 
     Write-ConsoleInfo ('{0} association(s) found for: {1}' -f $results.Count, $App)
+    if ($Verbosity -ne 'None') {
+        $results | Sort-Object Type, Association | Format-Table -AutoSize | Out-String | Write-Host
+    }
     $results | Sort-Object Type, Association | Write-Output
+    if ($exportCsvPath) { Write-AssociationCsv -Results $results -Path $exportCsvPath -Active:($exportCsvMode -eq 'Active') }
     exit 0
 }
 
@@ -334,6 +423,10 @@ if ($PSCmdlet.ParameterSetName -eq 'Category') {
     }
 
     Write-ConsoleInfo ('{0} extension(s) found for category: {1}' -f $results.Count, $Category)
+    if ($Verbosity -ne 'None') {
+        $results | Sort-Object Association | Format-Table -AutoSize | Out-String | Write-Host
+    }
     $results | Sort-Object Association | Write-Output
+    if ($exportCsvPath) { Write-AssociationCsv -Results $results -Path $exportCsvPath -Active:($exportCsvMode -eq 'Active') }
     exit 0
 }
