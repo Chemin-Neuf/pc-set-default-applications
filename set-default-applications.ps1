@@ -119,7 +119,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '2.3.0'
+$scriptVersion = '2.4.0'
 if ($Version) {
     Write-Host ('set-default-applications.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -339,7 +339,7 @@ function Resolve-ProgIDForApplicationAssociation {
     else {
         $candidateApplications = @(
             $ApplicationMap.Values |
-                Where-Object { $_.DisplayName -eq $Application } |
+                Where-Object { $_.DisplayName -eq $Application -or (Remove-TrailingVersion -Name $_.DisplayName) -eq $Application } |
                 Sort-Object RegisteredName
         )
     }

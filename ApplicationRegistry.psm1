@@ -499,6 +499,31 @@ function Resolve-RegisteredApplication {
 }
 
 # ============================================================
+# DISPLAY NAME HELPERS
+# ============================================================
+
+<#
+.SYNOPSIS
+    Strips a trailing version number from a display name.
+
+.DESCRIPTION
+    Removes a version suffix of the form " N", " N.N", " N.N.N", etc. from the
+    end of a display name. Useful for presenting a clean name when the version
+    is not needed to distinguish between applications.
+
+.PARAMETER Name
+    Display name potentially ending with a version number.
+
+.OUTPUTS
+    The display name with the trailing version removed, or the original string
+    if no trailing version was found.
+#>
+function Remove-TrailingVersion {
+    param([Parameter(Mandatory=$true)][string]$Name)
+    return ($Name -replace '\s+\d[\d.]*$', '')
+}
+
+# ============================================================
 # MODULE EXPORTS
 # ============================================================
 Export-ModuleMember -Function @(
@@ -509,5 +534,6 @@ Export-ModuleMember -Function @(
     'Convert-AppxResourceStringToDisplayName',
     'Get-RegisteredApplicationDisplayName',
     'Get-RegisteredApplications',
-    'Resolve-RegisteredApplication'
+    'Resolve-RegisteredApplication',
+    'Remove-TrailingVersion'
 )

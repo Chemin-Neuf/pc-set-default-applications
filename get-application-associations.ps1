@@ -164,7 +164,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '3.1.0'
+$scriptVersion = '3.3.0'
 if ($Version) {
     Write-Host ('get-application-associations.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -242,7 +242,8 @@ function Resolve-RegisteredApplicationEntries {
 
     $found = foreach ($registeredApplication in $RegisteredApplications.Values) {
         $resolvedApplication = Resolve-RegisteredApplication -RegisteredApplication $registeredApplication
-        if ($resolvedApplication.DisplayName -eq $Application) {
+        if ($resolvedApplication.DisplayName -eq $Application -or
+            (Remove-TrailingVersion -Name $resolvedApplication.DisplayName) -eq $Application) {
             $resolvedApplication
         }
     }
@@ -264,10 +265,37 @@ function Get-FriendlyRegisteredApplications {
         Resolve-RegisteredApplication -RegisteredApplication $registeredApplication
     }
 
+    # Exclude AppX entries that did not resolve to a friendly name (DisplayName still equals
+    # the raw registered name, which is an auto-generated hash starting with AppX).
+    $resolvedApplications = @($resolvedApplications | Where-Object {
+        -not ($_.RegisteredName -like 'AppX*' -and $_.DisplayName -eq $_.RegisteredName)
+    })
+
     $results = foreach ($group in ($resolvedApplications | Group-Object DisplayName | Sort-Object Name)) {
         [PSCustomObject]@{
             Application            = $group.Name
             RegisteredApplications = ($group.Group | Sort-Object RegisteredName | ForEach-Object { $_.RegisteredName }) -join '; '
+        }
+    }
+
+    # Strip trailing version numbers when the base name is unique across all results.
+    # Example: "GIMP 3.2.4" → "GIMP" when no other entry strips to "GIMP".
+    # "MuseScore 3" and "MuseScore 4" both strip to "MuseScore" → both keep their original name.
+    $baseNameCounts = @{}
+    foreach ($result in $results) {
+        $baseName = Remove-TrailingVersion -Name $result.Application
+        if (-not $baseNameCounts.ContainsKey($baseName)) { $baseNameCounts[$baseName] = 0 }
+        $baseNameCounts[$baseName]++
+    }
+    $results = foreach ($result in $results) {
+        $baseName = Remove-TrailingVersion -Name $result.Application
+        if ($baseNameCounts[$baseName] -eq 1 -and $baseName -ne $result.Application) {
+            [PSCustomObject]@{
+                Application            = $baseName
+                RegisteredApplications = $result.RegisteredApplications
+            }
+        } else {
+            $result
         }
     }
 
