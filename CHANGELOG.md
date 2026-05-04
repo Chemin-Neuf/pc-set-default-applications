@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## get-application-associations.ps1
 
+### [3.4.0] - 2026-05-04
+
+#### Changed
+
+- CSV export (`-ExportCsv` with `-App` or `-Category`) now uses the version-stripped friendly name in the `Application` column, consistent with what `-ListApps` displays. `MuseScore 3` / `MuseScore 4` are still kept as-is since they cannot be distinguished without the version.
+
 ### [3.3.0] - 2026-05-04
 
 #### Changed

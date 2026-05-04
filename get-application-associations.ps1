@@ -164,7 +164,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '3.3.0'
+$scriptVersion = '3.4.0'
 if ($Version) {
     Write-Host ('get-application-associations.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -343,6 +343,34 @@ function Resolve-ApplicationNameForAssociation {
 
 <#
 .SYNOPSIS
+    Returns the version-stripped friendly name for a display name, when the stripped
+    name is unique across all registered applications.
+
+.PARAMETER DisplayName
+    Full display name (e.g. "GIMP 3.2.4").
+
+.PARAMETER RegisteredApplications
+    Hashtable returned by Get-RegisteredApplications.
+#>
+function Resolve-EffectiveFriendlyName {
+    param(
+        [Parameter(Mandatory=$true)][string]$DisplayName,
+        [Parameter(Mandatory=$true)][hashtable]$RegisteredApplications
+    )
+    $baseName = Remove-TrailingVersion -Name $DisplayName
+    if ($baseName -eq $DisplayName) { return $DisplayName }
+    foreach ($app in $RegisteredApplications.Values) {
+        $resolved = Resolve-RegisteredApplication -RegisteredApplication $app
+        if ($resolved.DisplayName -ne $DisplayName -and
+            (Remove-TrailingVersion -Name $resolved.DisplayName) -eq $baseName) {
+            return $DisplayName   # collision — keep original name
+        }
+    }
+    return $baseName
+}
+
+<#
+.SYNOPSIS
     Escapes a value for CSV output when needed.
 
 .PARAMETER Value
@@ -472,7 +500,7 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
         exit 1
     }
 
-    $displayName = $selectedApplications[0].DisplayName
+    $displayName = Resolve-EffectiveFriendlyName -DisplayName $selectedApplications[0].DisplayName -RegisteredApplications $registeredApplications
 
     $results = [System.Collections.Generic.List[PSObject]]::new()
     $seenAssociations = @{}
@@ -579,6 +607,13 @@ if ($PSCmdlet.ParameterSetName -eq 'Category') {
         Write-Warning ('No extensions found for category: {0}' -f $Category)
         Write-ConsoleInfo 'Run with -ListCategories to see available categories.'
         exit 0
+    }
+
+    $catRegisteredApplications = Get-RegisteredApplications   # already cached
+    foreach ($result in $results) {
+        if ($result.Application) {
+            $result.Application = Resolve-EffectiveFriendlyName -DisplayName $result.Application -RegisteredApplications $catRegisteredApplications
+        }
     }
 
     Write-ConsoleInfo ('{0} extension(s) found for category: {1}' -f $results.Count, $Category)

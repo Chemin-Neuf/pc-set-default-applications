@@ -28,3 +28,5 @@ Association,Application
 #.mkv,VLC media player
 # --- Audio ---
 #.mp3,VLC media player
+.ani,IrfanView
+.arw,IrfanView
