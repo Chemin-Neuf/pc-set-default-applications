@@ -470,12 +470,23 @@ function Convert-AppxResourceStringToDisplayName {
     param([AllowNull()][string]$ResourceString)
 
     if ([string]::IsNullOrWhiteSpace($ResourceString)) { return '' }
+
+    # Only handles UWP-style indirect strings: @{PackageName_Version?ms-resource://...}
+    # The package name up to the first _ or ? contains dot-separated segments.
     if ($ResourceString -notmatch '^@\{([^_\?]+)') { return '' }
 
+    # The last dot-segment of the package name is the most specific part.
+    # e.g. @{Microsoft.BingWeather_4.54...} -> packageName="Microsoft.BingWeather" -> leafName="BingWeather"
     $packageName = $Matches[1]
     $leafName = ($packageName -split '\.')[-1]
-    $friendlyName = $leafName -replace '([a-z0-9])([A-Z])', '$1 $2'
-    $friendlyName = $friendlyName -replace '([A-Z])([A-Z][a-z])', '$1 $2'
+
+    # Split CamelCase into words by inserting spaces at case transitions.
+    # Must use -creplace (case-sensitive) — plain -replace is case-insensitive and would
+    # insert spaces between every pair of letters, producing "B in gW ea th er".
+    # Pass 1: lowercase-or-digit followed by uppercase  -> "BingWeather" -> "Bing Weather"
+    $friendlyName = $leafName -creplace '([a-z0-9])([A-Z])', '$1 $2'
+    # Pass 2: uppercase followed by uppercase+lowercase -> "XMLParser" -> "XML Parser"
+    $friendlyName = $friendlyName -creplace '([A-Z])([A-Z][a-z])', '$1 $2'
     return $friendlyName.Trim()
 }
 
@@ -496,35 +507,70 @@ function Get-RegisteredApplicationDisplayName {
         [AllowNull()][string]$CapabilitiesRawPath
     )
 
+    # No Capabilities key found at all — raw name is the only information available.
     if (-not $ApplicationName) { return $RegisteredName }
 
+    # Step 1 — ApplicationName from the Capabilities key, resolved via SHLoadIndirectString.
+    #
+    # Most Win32 apps (Brave, Firefox, VLC, ...) store a plain string: ApplicationName="Brave".
+    # Win32 apps that share a string table with their binary (e.g. Office) store a DLL resource
+    # reference: ApplicationName="@C:\...\oregres.dll,-206".
+    # SHLoadIndirectString resolves both plain strings (returned as-is) and DLL references.
+    # If the call succeeds and the result is not itself an unresolved @ string, we are done.
     $resolvedName = Resolve-IndirectString -Value $ApplicationName
     if (-not [string]::IsNullOrWhiteSpace($resolvedName) -and -not $resolvedName.StartsWith('@')) {
         return $resolvedName
     }
 
+    # Step 2 — UWP/AppX ms-resource indirect string that SHLoadIndirectString could not resolve.
+    #
+    # UWP apps store: ApplicationName="@{Microsoft.BingWeather_4.54...?ms-resource://...}".
+    # SHLoadIndirectString can resolve these when the package is active, but fails when the
+    # package resources are not loaded (e.g. running as a different user or in a restricted
+    # environment). When it fails the raw @ string is returned unchanged from Step 1.
+    # As a fallback, we parse the package name out of the string and split its CamelCase
+    # leaf segment into words: "BingWeather" -> "Bing Weather".
     $fallbackDisplayName = Convert-AppxResourceStringToDisplayName -ResourceString $ApplicationName
     if (-not [string]::IsNullOrWhiteSpace($fallbackDisplayName)) {
         return $fallbackDisplayName
     }
 
+    # Step 3 — Office-style registered name: "Excel.Application.16", "Winword.Application.16".
+    #
+    # Office apps use a ProgID-like registration name with a .Application.N suffix.
+    # The part before the first .Application. is a recognisable short name.
+    # e.g. "Excel.Application.16" -> "Excel"  (used when the DLL resource in Step 1 failed)
     if ($RegisteredName -match '^([^.]+)\.Application\.\d+$') {
         return $Matches[1]
     }
 
+    # Step 4 — Firefox/Chrome-style registered name with a hex channel/profile suffix.
+    #
+    # Some browsers append a dash followed by an uppercase hex identifier to make their
+    # registration unique per install channel or profile.
+    # e.g. "Firefox-308046B0AF4A39CB" -> "Firefox"
+    #      "Brave.R6XA3SEV5DUAGVO75MIQPSAUGE" is handled earlier in Step 1 (plain ApplicationName);
+    #      this pattern covers cases where ApplicationName is absent.
     if ($RegisteredName -match '^(.+?)-[A-F0-9]{8,}$') {
         return $Matches[1]
     }
 
+    # Step 5 — AppX registration whose capabilities key exists but has no resolvable ApplicationName.
+    #
+    # Some AppX packages have an ApplicationName value that SHLoadIndirectString cannot resolve
+    # AND whose package name does not yield a useful label from Step 2 (e.g. generic "App" suffix).
+    # In that case, extract the last folder segment of the capabilities path (the component name
+    # within the package, e.g. "WebExperienceHost") and apply the same CamelCase splitting.
     if ($RegisteredName -like 'AppX*' -and $CapabilitiesRawPath -match '\\([^\\]+)\\Capabilities$') {
         $leafName = ($Matches[1] -split '\.')[-1]
-        $leafName = $leafName -replace '([a-z0-9])([A-Z])', '$1 $2'
-        $leafName = $leafName -replace '([A-Z])([A-Z][a-z])', '$1 $2'
+        $leafName = $leafName -creplace '([a-z0-9])([A-Z])', '$1 $2'
+        $leafName = $leafName -creplace '([A-Z])([A-Z][a-z])', '$1 $2'
         if (-not [string]::IsNullOrWhiteSpace($leafName) -and $leafName -ne 'App') {
             return $leafName.Trim()
         }
     }
 
+    # No conversion succeeded — return the raw registered name unchanged.
     return $RegisteredName
 }
 
