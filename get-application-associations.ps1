@@ -790,6 +790,9 @@ if ($PSCmdlet.ParameterSetName -eq 'ListApps') {
             exit 0
         }
         Write-ConsoleInfo ('{0} friendly application name(s) found across {1} registered entry/entries:' -f $friendlyApplications.Count, $registeredApplications.Count)
+        if ($Verbosity -ne 'None') {
+            $friendlyApplications | Format-Table -AutoSize | Out-String | Write-Host
+        }
         $friendlyApplications | Write-Output
         exit 0
     }
