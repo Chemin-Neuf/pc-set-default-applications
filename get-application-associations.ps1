@@ -4,18 +4,23 @@
 <#
 .SYNOPSIS
     Discovers Windows application associations to help populate default-applications.csv.
-
 .DESCRIPTION
     Provides four read-only discovery modes by querying the Windows registry.
-    -ListApps lists all applications registered under RegisteredApplications.
+    -ListApps groups registered applications by friendly display name.
+    -ListAppsRaw lists all raw application names registered under RegisteredApplications.
     -ListCategories lists all distinct PerceivedType values found on this machine.
     -App shows all file and URL associations declared by a specific application.
     -Category shows all extensions of a given perceived type with their ProgIDs.
     No changes are made to the system. Use -ExportCsv with -App or -Category to
-    write a CSV file ready for use with set-default-applications.ps1.
+    export findings directly. Version: see $scriptVersion in the script body.
 
 .PARAMETER ListApps
-    Lists all application names registered under RegisteredApplications for the
+    Lists friendly application names resolved from each registration's Capabilities
+    metadata. When several registered names belong to the same application, they
+    are grouped together in one row.
+
+.PARAMETER ListAppsRaw
+    Lists all raw application names registered under RegisteredApplications for the
     current user and the local machine.
     These names can be used as input to -App.
 
@@ -24,9 +29,11 @@
     These names can be used as input to -Category.
 
 .PARAMETER App
-    Name of a registered application exactly as returned by -ListApps.
-    Outputs objects with Type, Association, Application, and ProgID properties
-    for all file extensions and URL protocols declared by that application.
+    Name of a registered application as returned by -ListAppsRaw, or a friendly
+    application name as returned by -ListApps.
+    Outputs objects with Type, Association, Application, RegisteredApplication,
+    and ProgID properties for all file extensions and URL protocols declared by
+    that application.
 
 .PARAMETER Category
     A perceived-type category name as returned by -ListCategories (e.g. video, audio).
@@ -62,7 +69,12 @@
 .EXAMPLE
     .\get-application-associations.ps1 -ListApps
 
-    Lists all registered application names.
+    Lists friendly application names and the registered names behind them.
+
+.EXAMPLE
+    .\get-application-associations.ps1 -ListAppsRaw
+
+    Lists all raw registered application names.
 
 .EXAMPLE
     .\get-application-associations.ps1 -ListCategories
@@ -96,7 +108,7 @@
 
 .NOTES
     File:           get-application-associations.ps1
-    Version:        2.2.3
+    Version:        # see $scriptVersion
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
     Major Contributors: GPT-5.4 (GitHub Copilot)
     License:        GPL-3.0-only
@@ -106,7 +118,11 @@
 [CmdletBinding(DefaultParameterSetName = 'ListApps')]
 param(
     [Parameter(ParameterSetName = 'ListApps')]
+    [Alias('ListAppsFriendly')]
     [switch]$ListApps,
+
+    [Parameter(ParameterSetName = 'ListApps')]
+    [switch]$ListAppsRaw,
 
     [Parameter(ParameterSetName = 'ListCategories', Mandatory = $true)]
     [switch]$ListCategories,
@@ -148,7 +164,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '2.2.3'
+$scriptVersion = '3.0.1'
 if ($Version) {
     Write-Host ('get-application-associations.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -160,6 +176,10 @@ $exportCsvPath = $null
 if ($ExportCsv) {
     $exportCsvPath = $ExportCsv
 }
+
+$script:registeredApplicationsCache = $null
+$script:resolvedRegisteredApplicationsCache = @{}
+$script:indirectStringCache = @{}
 
 # ============================================================
 # HELPERS
@@ -194,6 +214,131 @@ function Write-ConsoleError {
     Write-Host $Message -ForegroundColor Red
 }
 
+<#[
+.SYNOPSIS
+    Opens a registry subkey using the .NET registry API.
+
+.PARAMETER Hive
+    Registry hive: HKCU or HKLM.
+
+.PARAMETER View
+    Registry view: Registry64 or Registry32.
+
+.PARAMETER SubKeyPath
+    Registry path below the hive root.
+#>
+function Open-RegistrySubKey {
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('HKCU', 'HKLM')]
+        [string]$Hive,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('Registry64', 'Registry32')]
+        [string]$View,
+
+        [Parameter(Mandatory=$true)]
+        [string]$SubKeyPath
+    )
+
+    $registryHive = if ($Hive -eq 'HKCU') {
+        [Microsoft.Win32.RegistryHive]::CurrentUser
+    } else {
+        [Microsoft.Win32.RegistryHive]::LocalMachine
+    }
+    $registryView = [Microsoft.Win32.RegistryView]::$View
+    $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey($registryHive, $registryView)
+    try {
+        return $baseKey.OpenSubKey($SubKeyPath)
+    }
+    finally {
+        $baseKey.Dispose()
+    }
+}
+
+<#[
+.SYNOPSIS
+    Builds candidate capabilities-key locations for one registered application.
+
+.PARAMETER RawPath
+    Raw registry value stored under RegisteredApplications.
+
+.PARAMETER Hive
+    Source hive that declared the registration.
+
+.PARAMETER View
+    Source registry view that declared the registration.
+#>
+function Get-CapabilitiesKeyCandidates {
+    param(
+        [Parameter(Mandatory=$true)][string]$RawPath,
+        [Parameter(Mandatory=$true)][string]$Hive,
+        [Parameter(Mandatory=$true)][string]$View
+    )
+
+    $candidates = [System.Collections.Generic.List[PSObject]]::new()
+    $seenCandidateKeys = @{}
+
+    function Add-Candidate {
+        param(
+            [Parameter(Mandatory=$true)][string]$CandidateHive,
+            [Parameter(Mandatory=$true)][string]$CandidateView,
+            [Parameter(Mandatory=$true)][string]$CandidateSubKeyPath,
+            [Parameter(Mandatory=$true)][string]$CandidatePowerShellPath
+        )
+
+        $candidateKey = '{0}|{1}|{2}' -f $CandidateHive, $CandidateView, $CandidateSubKeyPath
+        if ($seenCandidateKeys.ContainsKey($candidateKey)) { return }
+        $candidates.Add([PSCustomObject]@{
+            Hive           = $CandidateHive
+            View           = $CandidateView
+            SubKeyPath     = $CandidateSubKeyPath
+            PowerShellPath = $CandidatePowerShellPath
+        })
+        $seenCandidateKeys[$candidateKey] = $true
+    }
+
+    if ($RawPath -match '^HKEY_LOCAL_MACHINE\\(.+)$') {
+        $subKeyPath = $Matches[1]
+        if ($subKeyPath -match '^SOFTWARE\\WOW6432Node\\(.+)$') {
+            Add-Candidate -CandidateHive 'HKLM' -CandidateView 'Registry32' -CandidateSubKeyPath ('SOFTWARE\{0}' -f $Matches[1]) -CandidatePowerShellPath ('HKLM:\SOFTWARE\WOW6432Node\{0}' -f $Matches[1])
+        } else {
+            Add-Candidate -CandidateHive 'HKLM' -CandidateView 'Registry64' -CandidateSubKeyPath $subKeyPath -CandidatePowerShellPath ('HKLM:\{0}' -f $subKeyPath)
+        }
+        return @($candidates)
+    }
+    if ($RawPath -match '^HKEY_CURRENT_USER\\(.+)$') {
+        $subKeyPath = $Matches[1]
+        if ($subKeyPath -match '^SOFTWARE\\WOW6432Node\\(.+)$') {
+            Add-Candidate -CandidateHive 'HKCU' -CandidateView 'Registry32' -CandidateSubKeyPath ('SOFTWARE\{0}' -f $Matches[1]) -CandidatePowerShellPath ('HKCU:\SOFTWARE\WOW6432Node\{0}' -f $Matches[1])
+        } else {
+            Add-Candidate -CandidateHive 'HKCU' -CandidateView 'Registry64' -CandidateSubKeyPath $subKeyPath -CandidatePowerShellPath ('HKCU:\{0}' -f $subKeyPath)
+        }
+        return @($candidates)
+    }
+    if ($RawPath -match '^HKLM:\\(.+)$') {
+        return Get-CapabilitiesKeyCandidates -RawPath ('HKEY_LOCAL_MACHINE\{0}' -f $Matches[1]) -Hive $Hive -View $View
+    }
+    if ($RawPath -match '^HKCU:\\(.+)$') {
+        return Get-CapabilitiesKeyCandidates -RawPath ('HKEY_CURRENT_USER\{0}' -f $Matches[1]) -Hive $Hive -View $View
+    }
+
+    if ($RawPath -match '^Software\\(.+)$') {
+        $relativeSoftwarePath = $Matches[1]
+        if ($View -eq 'Registry32') {
+            Add-Candidate -CandidateHive $Hive -CandidateView 'Registry32' -CandidateSubKeyPath ('SOFTWARE\{0}' -f $relativeSoftwarePath) -CandidatePowerShellPath ('{0}:\SOFTWARE\WOW6432Node\{1}' -f $Hive, $relativeSoftwarePath)
+            Add-Candidate -CandidateHive $Hive -CandidateView 'Registry64' -CandidateSubKeyPath ('SOFTWARE\{0}' -f $relativeSoftwarePath) -CandidatePowerShellPath ('{0}:\SOFTWARE\{1}' -f $Hive, $relativeSoftwarePath)
+        } else {
+            Add-Candidate -CandidateHive $Hive -CandidateView 'Registry64' -CandidateSubKeyPath ('SOFTWARE\{0}' -f $relativeSoftwarePath) -CandidatePowerShellPath ('{0}:\SOFTWARE\{1}' -f $Hive, $relativeSoftwarePath)
+            Add-Candidate -CandidateHive $Hive -CandidateView 'Registry32' -CandidateSubKeyPath ('SOFTWARE\{0}' -f $relativeSoftwarePath) -CandidatePowerShellPath ('{0}:\SOFTWARE\WOW6432Node\{1}' -f $Hive, $relativeSoftwarePath)
+        }
+        return @($candidates)
+    }
+
+    Add-Candidate -CandidateHive $Hive -CandidateView $View -CandidateSubKeyPath $RawPath -CandidatePowerShellPath ('{0}:\{1}' -f $Hive, $RawPath)
+    return @($candidates)
+}
+
 <#
 .SYNOPSIS
     Resolves the full PowerShell registry path to an application's Capabilities subkey.
@@ -205,7 +350,10 @@ function Write-ConsoleError {
     HKEY_LOCAL_MACHINE / HKEY_CURRENT_USER prefix.
 #>
 function Resolve-CapabilitiesPath {
-    param([Parameter(Mandatory=$true)][string]$RawPath)
+    param(
+        [Parameter(Mandatory=$true)][string]$RawPath,
+        [AllowNull()][string]$PreferredRoot
+    )
 
     # Normalize full HKEY_ prefixes to PowerShell drive notation
     $normalizedPath = $RawPath
@@ -224,18 +372,28 @@ function Resolve-CapabilitiesPath {
         return $null
     }
 
-    # Treat as relative — try HKLM then HKCU, with WOW6432Node fallback for 32-bit apps
-    $hklmPath = 'HKLM:\' + $normalizedPath
-    if (Test-Path $hklmPath) { return $hklmPath }
-    $hkcuPath = 'HKCU:\' + $normalizedPath
-    if (Test-Path $hkcuPath) { return $hkcuPath }
+    # Treat as relative — prefer the hive that registered the app, then try the other hive.
+    $rootsToTry = [System.Collections.Generic.List[string]]::new()
+    if ($PreferredRoot) {
+        $rootsToTry.Add($PreferredRoot)
+    }
+    foreach ($fallbackRoot in @('HKCU:\', 'HKLM:\')) {
+        if (-not $rootsToTry.Contains($fallbackRoot)) {
+            $rootsToTry.Add($fallbackRoot)
+        }
+    }
+
+    foreach ($root in $rootsToTry) {
+        $candidatePath = $root + $normalizedPath
+        if (Test-Path $candidatePath) { return $candidatePath }
+    }
 
     # 32-bit apps on 64-bit Windows are redirected to WOW6432Node
     if ($normalizedPath -match '^Software\\(.+)$') {
-        $wow64Path = 'HKLM:\SOFTWARE\WOW6432Node\' + $Matches[1]
-        if (Test-Path $wow64Path) { return $wow64Path }
-        $wow64PathHkcu = 'HKCU:\SOFTWARE\WOW6432Node\' + $Matches[1]
-        if (Test-Path $wow64PathHkcu) { return $wow64PathHkcu }
+        foreach ($root in $rootsToTry) {
+            $wow64Path = ('{0}SOFTWARE\WOW6432Node\{1}' -f $root, $Matches[1])
+            if (Test-Path $wow64Path) { return $wow64Path }
+        }
     }
     return $null
 }
@@ -260,32 +418,259 @@ function Get-RegistryValues {
 
 <#
 .SYNOPSIS
-    Returns all RegisteredApplications entries visible to this user.
+    Resolves an indirect Windows resource string to plain text when possible.
 
-.DESCRIPTION
-    Combines per-user and machine-wide registrations. User-scoped entries are
-    preferred when the same application name exists in multiple hives.
+.PARAMETER Value
+    Raw string that may contain an indirect reference such as @file,-123 or
+    @{Package?ms-resource://...}.
 #>
-function Get-RegisteredApplications {
-    $registeredApplications = [ordered]@{}
-    $registeredApplicationPaths = @(
-        'HKCU:\SOFTWARE\RegisteredApplications',
-        'HKCU:\SOFTWARE\WOW6432Node\RegisteredApplications',
-        'HKLM:\SOFTWARE\RegisteredApplications',
-        'HKLM:\SOFTWARE\WOW6432Node\RegisteredApplications'
+function Resolve-IndirectString {
+    param([AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value) -or -not $Value.StartsWith('@')) {
+        return $Value
+    }
+
+    if ($script:indirectStringCache.ContainsKey($Value)) {
+        return $script:indirectStringCache[$Value]
+    }
+
+    if (-not ('RegisteredApplicationNativeMethods' -as [type])) {
+        Add-Type -Name 'RegisteredApplicationNativeMethods' -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("shlwapi.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
+public static extern int SHLoadIndirectString(string pszSource, System.Text.StringBuilder pszOutBuf, int cchOutBuf, System.IntPtr ppvReserved);
+'@ -ErrorAction SilentlyContinue
+    }
+
+    if (-not ('RegisteredApplicationNativeMethods' -as [type])) {
+        $script:indirectStringCache[$Value] = $Value
+        return $Value
+    }
+
+    $buffer = New-Object System.Text.StringBuilder 1024
+    $hResult = [RegisteredApplicationNativeMethods]::SHLoadIndirectString($Value, $buffer, $buffer.Capacity, [IntPtr]::Zero)
+    if ($hResult -eq 0 -and $buffer.Length -gt 0) {
+        $resolvedValue = $buffer.ToString()
+        $script:indirectStringCache[$Value] = $resolvedValue
+        return $resolvedValue
+    }
+
+    $script:indirectStringCache[$Value] = $Value
+    return $Value
+}
+
+<#[
+.SYNOPSIS
+    Derives a readable fallback label from an unresolved AppX resource string.
+
+.PARAMETER ResourceString
+    Raw indirect resource string in @{Package?ms-resource://...} form.
+#>
+function Convert-AppxResourceStringToDisplayName {
+    param([AllowNull()][string]$ResourceString)
+
+    if ([string]::IsNullOrWhiteSpace($ResourceString)) { return '' }
+    if ($ResourceString -notmatch '^@\{([^_\?]+)') { return '' }
+
+    $packageName = $Matches[1]
+    $leafName = ($packageName -split '\.')[-1]
+    $friendlyName = $leafName -replace '([a-z0-9])([A-Z])', '$1 $2'
+    $friendlyName = $friendlyName -replace '([A-Z])([A-Z][a-z])', '$1 $2'
+    return $friendlyName.Trim()
+}
+
+<#
+.SYNOPSIS
+    Resolves the friendly display name of a registered application.
+
+.PARAMETER RegisteredName
+    Raw application name stored under RegisteredApplications.
+
+.PARAMETER CapabilitiesPath
+    Full path to the application's Capabilities registry key.
+#>
+function Get-RegisteredApplicationDisplayName {
+    param(
+        [Parameter(Mandatory=$true)][string]$RegisteredName,
+        [AllowNull()][string]$ApplicationName,
+        [AllowNull()][string]$CapabilitiesRawPath
     )
 
-    foreach ($registeredApplicationPath in $registeredApplicationPaths) {
-        $appsKey = Get-Item -Path $registeredApplicationPath -ErrorAction SilentlyContinue
-        if (-not $appsKey) { continue }
+    if (-not $ApplicationName) { return $RegisteredName }
 
-        foreach ($appName in ($appsKey.GetValueNames() | Where-Object { $_ } | Sort-Object)) {
-            if ($registeredApplications.Contains($appName)) { continue }
-            $registeredApplications[$appName] = $appsKey.GetValue($appName)
+    $resolvedName = Resolve-IndirectString -Value $ApplicationName
+    if (-not [string]::IsNullOrWhiteSpace($resolvedName) -and -not $resolvedName.StartsWith('@')) {
+        return $resolvedName
+    }
+
+    $fallbackDisplayName = Convert-AppxResourceStringToDisplayName -ResourceString $ApplicationName
+    if (-not [string]::IsNullOrWhiteSpace($fallbackDisplayName)) {
+        return $fallbackDisplayName
+    }
+
+    if ($RegisteredName -match '^([^.]+)\.Application\.\d+$') {
+        return $Matches[1]
+    }
+
+    if ($RegisteredName -match '^(.+?)-[A-F0-9]{8,}$') {
+        return $Matches[1]
+    }
+
+    if ($RegisteredName -like 'AppX*' -and $CapabilitiesRawPath -match '\\([^\\]+)\\Capabilities$') {
+        $leafName = ($Matches[1] -split '\.')[-1]
+        $leafName = $leafName -replace '([a-z0-9])([A-Z])', '$1 $2'
+        $leafName = $leafName -replace '([A-Z])([A-Z][a-z])', '$1 $2'
+        if (-not [string]::IsNullOrWhiteSpace($leafName) -and $leafName -ne 'App') {
+            return $leafName.Trim()
         }
     }
 
-    return $registeredApplications
+    return $RegisteredName
+}
+
+<#
+.SYNOPSIS
+    Returns all raw RegisteredApplications entries visible to this user.
+
+.DESCRIPTION
+    Combines per-user and machine-wide registrations. User-scoped entries are
+    preferred when the same application name exists in multiple hives. Friendly
+    names and capabilities paths are resolved lazily only when needed.
+#>
+function Get-RegisteredApplications {
+    if ($script:registeredApplicationsCache) {
+        return $script:registeredApplicationsCache
+    }
+
+    $registeredApplications = [ordered]@{}
+    $registeredApplicationPaths = @(
+        [PSCustomObject]@{ Hive = 'HKCU'; View = 'Registry64'; SubKeyPath = 'SOFTWARE\RegisteredApplications' },
+        [PSCustomObject]@{ Hive = 'HKCU'; View = 'Registry32'; SubKeyPath = 'SOFTWARE\RegisteredApplications' },
+        [PSCustomObject]@{ Hive = 'HKLM'; View = 'Registry64'; SubKeyPath = 'SOFTWARE\RegisteredApplications' },
+        [PSCustomObject]@{ Hive = 'HKLM'; View = 'Registry32'; SubKeyPath = 'SOFTWARE\RegisteredApplications' }
+    )
+
+    foreach ($registeredApplicationLocation in $registeredApplicationPaths) {
+        $appsKey = Open-RegistrySubKey -Hive $registeredApplicationLocation.Hive -View $registeredApplicationLocation.View -SubKeyPath $registeredApplicationLocation.SubKeyPath
+        if (-not $appsKey) { continue }
+
+        try {
+            foreach ($appName in ($appsKey.GetValueNames() | Where-Object { $_ } | Sort-Object)) {
+                if ($registeredApplications.Contains($appName)) { continue }
+                $registeredApplications[$appName] = [PSCustomObject]@{
+                    RegisteredName      = $appName
+                    Hive                = $registeredApplicationLocation.Hive
+                    View                = $registeredApplicationLocation.View
+                    CapabilitiesRawPath = [string]$appsKey.GetValue($appName)
+                }
+            }
+        }
+        finally {
+            $appsKey.Dispose()
+        }
+    }
+
+    $script:registeredApplicationsCache = $registeredApplications
+    return $script:registeredApplicationsCache
+}
+
+<#
+.SYNOPSIS
+    Resolves cached display metadata for one registered application entry.
+
+.PARAMETER RegisteredApplication
+    Raw registered application entry returned by Get-RegisteredApplications.
+#>
+function Resolve-RegisteredApplication {
+    param([Parameter(Mandatory=$true)]$RegisteredApplication)
+
+    if ($script:resolvedRegisteredApplicationsCache.ContainsKey($RegisteredApplication.RegisteredName)) {
+        return $script:resolvedRegisteredApplicationsCache[$RegisteredApplication.RegisteredName]
+    }
+
+    $capabilitiesPath = $null
+    $applicationName = $null
+    if ($RegisteredApplication.CapabilitiesRawPath) {
+        foreach ($candidate in (Get-CapabilitiesKeyCandidates -RawPath $RegisteredApplication.CapabilitiesRawPath -Hive $RegisteredApplication.Hive -View $RegisteredApplication.View)) {
+            $capabilitiesKey = Open-RegistrySubKey -Hive $candidate.Hive -View $candidate.View -SubKeyPath $candidate.SubKeyPath
+            if (-not $capabilitiesKey) { continue }
+
+            try {
+                $capabilitiesPath = $candidate.PowerShellPath
+                $applicationName = [string]$capabilitiesKey.GetValue('ApplicationName')
+                break
+            }
+            finally {
+                $capabilitiesKey.Dispose()
+            }
+        }
+    }
+
+    $resolvedApplication = [PSCustomObject]@{
+        RegisteredName      = $RegisteredApplication.RegisteredName
+        DisplayName         = Get-RegisteredApplicationDisplayName -RegisteredName $RegisteredApplication.RegisteredName -ApplicationName $applicationName -CapabilitiesRawPath $RegisteredApplication.CapabilitiesRawPath
+        Hive                = $RegisteredApplication.Hive
+        View                = $RegisteredApplication.View
+        CapabilitiesRawPath = $RegisteredApplication.CapabilitiesRawPath
+        CapabilitiesPath    = $capabilitiesPath
+    }
+
+    $script:resolvedRegisteredApplicationsCache[$RegisteredApplication.RegisteredName] = $resolvedApplication
+    return $resolvedApplication
+}
+
+<#
+.SYNOPSIS
+    Resolves one or more registered application entries from either a raw or friendly name.
+
+.PARAMETER Application
+    Raw application name or friendly display name.
+
+.PARAMETER RegisteredApplications
+    Hashtable returned by Get-RegisteredApplications.
+#>
+function Resolve-RegisteredApplicationEntries {
+    param(
+        [Parameter(Mandatory=$true)][string]$Application,
+        [Parameter(Mandatory=$true)][hashtable]$RegisteredApplications
+    )
+
+    if ($RegisteredApplications.ContainsKey($Application)) {
+        return @(Resolve-RegisteredApplication -RegisteredApplication $RegisteredApplications[$Application])
+    }
+
+    $matches = foreach ($registeredApplication in $RegisteredApplications.Values) {
+        $resolvedApplication = Resolve-RegisteredApplication -RegisteredApplication $registeredApplication
+        if ($resolvedApplication.DisplayName -eq $Application) {
+            $resolvedApplication
+        }
+    }
+
+    return @($matches | Sort-Object RegisteredName)
+}
+
+<#
+.SYNOPSIS
+    Groups registered applications by their friendly display name.
+
+.PARAMETER RegisteredApplications
+    Hashtable returned by Get-RegisteredApplications.
+#>
+function Get-FriendlyRegisteredApplications {
+    param([Parameter(Mandatory=$true)][hashtable]$RegisteredApplications)
+
+    $resolvedApplications = foreach ($registeredApplication in $RegisteredApplications.Values) {
+        Resolve-RegisteredApplication -RegisteredApplication $registeredApplication
+    }
+
+    $results = foreach ($group in ($resolvedApplications | Group-Object DisplayName | Sort-Object Name)) {
+        [PSCustomObject]@{
+            Application            = $group.Name
+            RegisteredApplications = ($group.Group | Sort-Object RegisteredName | ForEach-Object { $_.RegisteredName }) -join '; '
+        }
+    }
+
+    return @($results)
 }
 
 <#
@@ -308,10 +693,8 @@ function Resolve-ApplicationNameForAssociation {
     if ($registeredApplications.Count -eq 0) { return '' }
 
     foreach ($appName in ($registeredApplications.Keys | Sort-Object)) {
-        $capRelPath = $registeredApplications[$appName]
-        if (-not $capRelPath) { continue }
-
-        $capPath = Resolve-CapabilitiesPath -RawPath $capRelPath
+        $registeredApplication = Resolve-RegisteredApplication -RegisteredApplication $registeredApplications[$appName]
+        $capPath = $registeredApplication.CapabilitiesPath
         if (-not $capPath) { continue }
 
         $associationPath = if ($Association.StartsWith('.')) {
@@ -322,7 +705,7 @@ function Resolve-ApplicationNameForAssociation {
 
         $values = Get-RegistryValues -KeyPath $associationPath
         if ($values.Contains($Association) -and $values[$Association] -eq $ProgID) {
-            return $appName
+            return $registeredApplication.DisplayName
         }
     }
 
@@ -400,6 +783,17 @@ function Write-AssociationCsv {
 # ============================================================
 if ($PSCmdlet.ParameterSetName -eq 'ListApps') {
     $registeredApplications = Get-RegisteredApplications
+    if (-not $ListAppsRaw) {
+        $friendlyApplications = Get-FriendlyRegisteredApplications -RegisteredApplications $registeredApplications
+        if (-not $friendlyApplications) {
+            Write-Warning 'No registered applications found.'
+            exit 0
+        }
+        Write-ConsoleInfo ('{0} friendly application name(s) found across {1} registered entry/entries:' -f $friendlyApplications.Count, $registeredApplications.Count)
+        $friendlyApplications | Write-Output
+        exit 0
+    }
+
     $names = $registeredApplications.Keys | Sort-Object
     if (-not $names) {
         Write-Warning 'No registered applications found.'
@@ -439,54 +833,69 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
         exit 1
     }
 
-    $capRelPath = $registeredApplications[$App]
-    if (-not $capRelPath) {
+    $selectedApplications = Resolve-RegisteredApplicationEntries -Application $App -RegisteredApplications $registeredApplications
+    if ($selectedApplications.Count -eq 0) {
         Write-Error ('Application not found: {0}' -f $App)
-        Write-ConsoleInfo 'Run with -ListApps to see available application names.'
+        Write-ConsoleInfo 'Run with -ListApps or -ListAppsRaw to see available application names.'
         exit 1
     }
-    Write-ConsoleDetail ('Capabilities subkey: {0}' -f $capRelPath)
 
-    $capPath = Resolve-CapabilitiesPath -RawPath $capRelPath
-    if (-not $capPath) {
-        Write-Error ('Capabilities registry key not found for: {0}{1}  Raw path from registry: {2}' -f $App, [Environment]::NewLine, $capRelPath)
-        exit 1
-    }
+    $displayName = $selectedApplications[0].DisplayName
 
     $results = [System.Collections.Generic.List[PSObject]]::new()
+    $seenAssociations = @{}
 
-    # File associations
-    $fileAssocPath = Join-Path $capPath 'FileAssociations'
-    if (Test-Path $fileAssocPath) {
-        $values = Get-RegistryValues -KeyPath $fileAssocPath
-        foreach ($ext in ($values.Keys | Sort-Object)) {
-            $results.Add([PSCustomObject]@{
-                Type        = 'Extension'
-                Association = $ext
-                Application = $App
-                ProgID      = $values[$ext]
-            })
+    foreach ($selectedApplication in $selectedApplications) {
+        if (-not $selectedApplication.CapabilitiesPath) {
+            Write-ConsoleDetail ('Skipping ''{0}'': capabilities registry key not found. Raw path from registry: {1}' -f $selectedApplication.RegisteredName, $selectedApplication.CapabilitiesRawPath)
+            continue
         }
-        Write-ConsoleDetail ('{0} file association(s) found.' -f $values.Count)
-    } else {
-        Write-ConsoleDetail 'No FileAssociations subkey found.'
-    }
 
-    # URL / protocol associations
-    $urlAssocPath = Join-Path $capPath 'URLAssociations'
-    if (Test-Path $urlAssocPath) {
-        $values = Get-RegistryValues -KeyPath $urlAssocPath
-        foreach ($proto in ($values.Keys | Sort-Object)) {
-            $results.Add([PSCustomObject]@{
-                Type        = 'Protocol'
-                Association = $proto
-                Application = $App
-                ProgID      = $values[$proto]
-            })
+        Write-ConsoleDetail ('Capabilities subkey for ''{0}'': {1}' -f $selectedApplication.RegisteredName, $selectedApplication.CapabilitiesRawPath)
+
+        # File associations
+        $fileAssocPath = Join-Path $selectedApplication.CapabilitiesPath 'FileAssociations'
+        if (Test-Path $fileAssocPath) {
+            $values = Get-RegistryValues -KeyPath $fileAssocPath
+            foreach ($ext in ($values.Keys | Sort-Object)) {
+                $associationKey = 'Extension|{0}' -f $ext
+                if ($seenAssociations.ContainsKey($associationKey)) { continue }
+
+                $results.Add([PSCustomObject]@{
+                    Type                  = 'Extension'
+                    Association           = $ext
+                    Application           = $displayName
+                    RegisteredApplication = $selectedApplication.RegisteredName
+                    ProgID                = $values[$ext]
+                })
+                $seenAssociations[$associationKey] = $true
+            }
+            Write-ConsoleDetail ('{0} file association(s) found for ''{1}''.' -f $values.Count, $selectedApplication.RegisteredName)
+        } else {
+            Write-ConsoleDetail ('No FileAssociations subkey found for ''{0}''.' -f $selectedApplication.RegisteredName)
         }
-        Write-ConsoleDetail ('{0} URL association(s) found.' -f $values.Count)
-    } else {
-        Write-ConsoleDetail 'No URLAssociations subkey found.'
+
+        # URL / protocol associations
+        $urlAssocPath = Join-Path $selectedApplication.CapabilitiesPath 'URLAssociations'
+        if (Test-Path $urlAssocPath) {
+            $values = Get-RegistryValues -KeyPath $urlAssocPath
+            foreach ($proto in ($values.Keys | Sort-Object)) {
+                $associationKey = 'Protocol|{0}' -f $proto
+                if ($seenAssociations.ContainsKey($associationKey)) { continue }
+
+                $results.Add([PSCustomObject]@{
+                    Type                  = 'Protocol'
+                    Association           = $proto
+                    Application           = $displayName
+                    RegisteredApplication = $selectedApplication.RegisteredName
+                    ProgID                = $values[$proto]
+                })
+                $seenAssociations[$associationKey] = $true
+            }
+            Write-ConsoleDetail ('{0} URL association(s) found for ''{1}''.' -f $values.Count, $selectedApplication.RegisteredName)
+        } else {
+            Write-ConsoleDetail ('No URLAssociations subkey found for ''{0}''.' -f $selectedApplication.RegisteredName)
+        }
     }
 
     if ($results.Count -eq 0) {
@@ -494,7 +903,7 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
         exit 0
     }
 
-    Write-ConsoleInfo ('{0} association(s) found for: {1}' -f $results.Count, $App)
+    Write-ConsoleInfo ('{0} association(s) found for: {1}' -f $results.Count, $displayName)
     if ($Verbosity -ne 'None') {
         $results | Sort-Object Type, Association | Format-Table -AutoSize | Out-String | Write-Host
     }

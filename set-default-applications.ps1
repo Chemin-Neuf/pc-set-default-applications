@@ -8,9 +8,11 @@
 .DESCRIPTION
     Reads a CSV configuration file listing file-extension-to-application and
     protocol-to-application associations, resolves the corresponding ProgID in
-    the registry, and applies the defaults using SetUserFTA. Configuration can
-    come either from one CSV file or from a TXT manifest listing multiple CSV
-    files in the exact order they should be processed.
+    the registry, and applies the defaults using SetUserFTA. The Application
+    column may use either the raw RegisteredApplications name or the friendly
+    display name exposed by the discovery script. Configuration can come either
+    from one CSV file or from a TXT manifest listing multiple CSV files in the
+    exact order they should be processed.
     SetUserFTA is resolved automatically: the cache path is checked first,
     then a download from the internet is attempted, then a copy from a
     network share. Results are logged to a logs\ subfolder next to the
@@ -24,7 +26,8 @@
     one CSV path per line in processing order. Relative paths are resolved from
     the manifest file's directory. For example, relative.csv resolves next to
     the manifest, ..\parent.csv resolves from the manifest's parent, and
-    absolute paths are used unchanged.
+    absolute paths are used unchanged. The Application column may contain either
+    the raw registered application name or a friendly application name.
     Lines starting with # are treated as comments and ignored.
     Defaults to default-applications.csv in the same directory as the script,
     or default-applications.txt when ConfigType is TXT.
@@ -79,7 +82,7 @@
 
 .NOTES
     File:           set-default-applications.ps1
-    Version:        2.1.2
+    Version:        2.2.0
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
     Major Contributors: GPT-5.4 (GitHub Copilot)
     License:        GPL-3.0-only
@@ -116,7 +119,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '2.1.2'
+$scriptVersion = '2.2.0'
 if ($Version) {
     Write-Host ('set-default-applications.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -333,6 +336,79 @@ function Get-RegistryValues {
 
 <#
 .SYNOPSIS
+    Resolves an indirect Windows resource string to plain text when possible.
+
+.PARAMETER Value
+    Raw string that may contain an indirect reference such as @file,-123 or
+    @{Package?ms-resource://...}.
+#>
+function Resolve-IndirectString {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value) -or -not $Value.StartsWith('@')) {
+        return $Value
+    }
+
+    if (-not ('RegisteredApplicationNativeMethods' -as [type])) {
+        Add-Type -Name 'RegisteredApplicationNativeMethods' -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("shlwapi.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
+public static extern int SHLoadIndirectString(string pszSource, System.Text.StringBuilder pszOutBuf, int cchOutBuf, System.IntPtr ppvReserved);
+'@ -ErrorAction SilentlyContinue
+    }
+
+    if (-not ('RegisteredApplicationNativeMethods' -as [type])) {
+        return $Value
+    }
+
+    $buffer = New-Object System.Text.StringBuilder 1024
+    $hResult = [RegisteredApplicationNativeMethods]::SHLoadIndirectString($Value, $buffer, $buffer.Capacity, [IntPtr]::Zero)
+    if ($hResult -eq 0 -and $buffer.Length -gt 0) {
+        return $buffer.ToString()
+    }
+
+    return $Value
+}
+
+<#
+.SYNOPSIS
+    Resolves the friendly display name of a registered application.
+
+.PARAMETER RegisteredName
+    Raw application name stored under RegisteredApplications.
+
+.PARAMETER CapabilitiesPath
+    Full path to the application's Capabilities registry key.
+#>
+function Get-RegisteredApplicationDisplayName {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$RegisteredName,
+
+        [AllowNull()]
+        [string]$CapabilitiesPath
+    )
+
+    if (-not $CapabilitiesPath) { return $RegisteredName }
+
+    $capabilitiesKey = Get-Item -Path $CapabilitiesPath -ErrorAction SilentlyContinue
+    if (-not $capabilitiesKey) { return $RegisteredName }
+
+    $applicationName = $capabilitiesKey.GetValue('ApplicationName')
+    if (-not $applicationName) { return $RegisteredName }
+
+    $resolvedName = Resolve-IndirectString -Value $applicationName
+    if ([string]::IsNullOrWhiteSpace($resolvedName)) { return $RegisteredName }
+
+    return $resolvedName
+}
+
+<#
+.SYNOPSIS
     Returns all RegisteredApplications entries visible to this user.
 
 .DESCRIPTION
@@ -357,7 +433,18 @@ function Get-RegisteredApplications {
 
         foreach ($appName in ($appsKey.GetValueNames() | Where-Object { $_ } | Sort-Object)) {
             if ($registeredApplications.Contains($appName)) { continue }
-            $registeredApplications[$appName] = $appsKey.GetValue($appName)
+            $capabilitiesRawPath = $appsKey.GetValue($appName)
+            $capabilitiesPath = $null
+            if ($capabilitiesRawPath) {
+                $capabilitiesPath = Resolve-CapabilitiesPath -RawPath $capabilitiesRawPath
+            }
+
+            $registeredApplications[$appName] = [PSCustomObject]@{
+                RegisteredName      = $appName
+                DisplayName         = Get-RegisteredApplicationDisplayName -RegisteredName $appName -CapabilitiesPath $capabilitiesPath
+                CapabilitiesRawPath = $capabilitiesRawPath
+                CapabilitiesPath    = $capabilitiesPath
+            }
         }
     }
 
@@ -384,16 +471,16 @@ function Get-RegisteredApplicationAssociations {
 
     $applications = @{}
     foreach ($appName in ($registeredApplications.Keys | Sort-Object)) {
-        $capabilitiesRawPath = $registeredApplications[$appName]
-        if (-not $capabilitiesRawPath) { continue }
-
-        $capabilitiesPath = Resolve-CapabilitiesPath -RawPath $capabilitiesRawPath
+        $registeredApplication = $registeredApplications[$appName]
+        $capabilitiesPath = $registeredApplication.CapabilitiesPath
         if (-not $capabilitiesPath) {
             Write-Detail ('Skipping application ''{0}'': capabilities path not found.' -f $appName)
             continue
         }
 
         $applications[$appName] = @{
+            DisplayName      = $registeredApplication.DisplayName
+            RegisteredName   = $registeredApplication.RegisteredName
             FileAssociations = Get-RegistryValues -KeyPath (Join-Path $capabilitiesPath 'FileAssociations')
             URLAssociations  = Get-RegistryValues -KeyPath (Join-Path $capabilitiesPath 'URLAssociations')
         }
@@ -410,7 +497,8 @@ function Get-RegisteredApplicationAssociations {
     File extension (for example .pdf) or protocol (for example http).
 
 .PARAMETER Application
-    Registered application name exactly as listed under RegisteredApplications.
+    Registered application name exactly as listed under RegisteredApplications,
+    or a friendly application name resolved from Capabilities\ApplicationName.
 
 .PARAMETER ApplicationMap
     Hashtable returned by Get-RegisteredApplicationAssociations.
@@ -428,18 +516,27 @@ function Resolve-ProgIDForApplicationAssociation {
         [hashtable]$ApplicationMap
     )
 
-    if (-not $ApplicationMap.ContainsKey($Application)) {
-        return $null
+    if ($ApplicationMap.ContainsKey($Application)) {
+        $candidateApplications = @($ApplicationMap[$Application])
+    }
+    else {
+        $candidateApplications = @(
+            $ApplicationMap.Values |
+                Where-Object { $_.DisplayName -eq $Application } |
+                Sort-Object RegisteredName
+        )
     }
 
-    $associationMap = if ($Association.StartsWith('.')) {
-        $ApplicationMap[$Application].FileAssociations
-    } else {
-        $ApplicationMap[$Application].URLAssociations
-    }
+    foreach ($candidateApplication in $candidateApplications) {
+        $associationMap = if ($Association.StartsWith('.')) {
+            $candidateApplication.FileAssociations
+        } else {
+            $candidateApplication.URLAssociations
+        }
 
-    if ($associationMap.Contains($Association)) {
-        return $associationMap[$Association]
+        if ($associationMap.Contains($Association)) {
+            return $associationMap[$Association]
+        }
     }
 
     return $null

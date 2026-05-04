@@ -37,6 +37,8 @@ Restores Windows 11 default application associations (file extensions and protoc
 
 Edit `default-applications.csv` to add your associations. Each uncommented row maps one file extension (`.pdf`) or protocol (`http`) to a registered application name such as `Windows Photo Viewer` or `VLC media player`. Spaces in names are fine; only quote a value if it contains a comma. If you want to split the configuration into several CSV files, list them in `default-applications.txt` in the exact order they should be applied; later files win when the same association appears more than once. In a TXT manifest, relative CSV paths are resolved from the manifest file's directory, while absolute paths are kept as-is.
 
+`get-application-associations.ps1 -ListApps` groups registered applications by a friendly display name resolved from Windows metadata, so entries such as `Brave.R6XA3SEV5DUAGVO75MIQPSAUGE` appear as `Brave`, and related registrations such as `CDBurnerXP.axp`, `CDBurnerXP.dxp`, and `CDBurnerXP.iso` are grouped under `CDBurnerXP`. `get-application-associations.ps1 -ListAppsRaw` shows the raw names stored in `RegisteredApplications` for compatibility. The old `-ListAppsFriendly` switch still works as an alias for `-ListApps`.
+
 ## License
 
 GPL-3.0-only — see [LICENSE](LICENSE).
