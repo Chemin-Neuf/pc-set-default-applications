@@ -119,7 +119,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '2.2.0'
+$scriptVersion = '2.3.0'
 if ($Version) {
     Write-Host ('set-default-applications.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -157,6 +157,13 @@ if (-not (Test-Path $sharedUtilsPath)) {
     exit 1
 }
 Import-Module $sharedUtilsPath -Force
+
+$appRegistryPath = Join-Path $PSScriptRoot 'ApplicationRegistry.psm1'
+if (-not (Test-Path $appRegistryPath)) {
+    Write-Error ('ApplicationRegistry.psm1 not found at: {0}' -f $appRegistryPath)
+    exit 1
+}
+Import-Module $appRegistryPath -Force
 
 # ============================================================
 # LOGGING
@@ -263,196 +270,6 @@ function Resolve-SetUserFTA {
 
 <#
 .SYNOPSIS
-    Resolves the full PowerShell registry path to an application's Capabilities subkey.
-    Handles both relative paths (Software\...) and absolute paths (HKEY_LOCAL_MACHINE\...).
-    Checks HKLM first, then HKCU.
-
-.PARAMETER RawPath
-    The path value stored in RegisteredApplications. May be relative or include a full
-    HKEY_LOCAL_MACHINE / HKEY_CURRENT_USER prefix.
-#>
-function Resolve-CapabilitiesPath {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$RawPath
-    )
-
-    $normalizedPath = $RawPath
-    if ($normalizedPath -match '^HKEY_LOCAL_MACHINE\\(.+)$') {
-        $normalizedPath = 'HKLM:\' + $Matches[1]
-    } elseif ($normalizedPath -match '^HKEY_CURRENT_USER\\(.+)$') {
-        $normalizedPath = 'HKCU:\' + $Matches[1]
-    }
-
-    if ($normalizedPath -match '^HK[A-Z]+:\\') {
-        if (Test-Path $normalizedPath) { return $normalizedPath }
-        $wow64Path = $normalizedPath -replace '^(HKLM:\\SOFTWARE\\)(?!WOW6432Node)', '$1WOW6432Node\\'
-        if ($wow64Path -ne $normalizedPath -and (Test-Path $wow64Path)) { return $wow64Path }
-        return $null
-    }
-
-    $hklmPath = 'HKLM:\' + $normalizedPath
-    if (Test-Path $hklmPath) { return $hklmPath }
-    $hkcuPath = 'HKCU:\' + $normalizedPath
-    if (Test-Path $hkcuPath) { return $hkcuPath }
-
-    if ($normalizedPath -match '^Software\\(.+)$') {
-        $wow64Path = 'HKLM:\SOFTWARE\WOW6432Node\' + $Matches[1]
-        if (Test-Path $wow64Path) { return $wow64Path }
-        $wow64PathHkcu = 'HKCU:\SOFTWARE\WOW6432Node\' + $Matches[1]
-        if (Test-Path $wow64PathHkcu) { return $wow64PathHkcu }
-    }
-
-    return $null
-}
-
-<#
-.SYNOPSIS
-    Returns an ordered hashtable of all value names and data from a registry key.
-
-.PARAMETER KeyPath
-    Full registry path to the key.
-#>
-function Get-RegistryValues {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$KeyPath
-    )
-
-    $key = Get-Item -Path $KeyPath -ErrorAction SilentlyContinue
-    if (-not $key) { return [ordered]@{} }
-
-    $result = [ordered]@{}
-    foreach ($name in $key.GetValueNames()) {
-        if ($name) {
-            $result[$name] = $key.GetValue($name)
-        }
-    }
-
-    return $result
-}
-
-<#
-.SYNOPSIS
-    Resolves an indirect Windows resource string to plain text when possible.
-
-.PARAMETER Value
-    Raw string that may contain an indirect reference such as @file,-123 or
-    @{Package?ms-resource://...}.
-#>
-function Resolve-IndirectString {
-    [CmdletBinding()]
-    param(
-        [AllowNull()]
-        [string]$Value
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value) -or -not $Value.StartsWith('@')) {
-        return $Value
-    }
-
-    if (-not ('RegisteredApplicationNativeMethods' -as [type])) {
-        Add-Type -Name 'RegisteredApplicationNativeMethods' -MemberDefinition @'
-[System.Runtime.InteropServices.DllImport("shlwapi.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
-public static extern int SHLoadIndirectString(string pszSource, System.Text.StringBuilder pszOutBuf, int cchOutBuf, System.IntPtr ppvReserved);
-'@ -ErrorAction SilentlyContinue
-    }
-
-    if (-not ('RegisteredApplicationNativeMethods' -as [type])) {
-        return $Value
-    }
-
-    $buffer = New-Object System.Text.StringBuilder 1024
-    $hResult = [RegisteredApplicationNativeMethods]::SHLoadIndirectString($Value, $buffer, $buffer.Capacity, [IntPtr]::Zero)
-    if ($hResult -eq 0 -and $buffer.Length -gt 0) {
-        return $buffer.ToString()
-    }
-
-    return $Value
-}
-
-<#
-.SYNOPSIS
-    Resolves the friendly display name of a registered application.
-
-.PARAMETER RegisteredName
-    Raw application name stored under RegisteredApplications.
-
-.PARAMETER CapabilitiesPath
-    Full path to the application's Capabilities registry key.
-#>
-function Get-RegisteredApplicationDisplayName {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$RegisteredName,
-
-        [AllowNull()]
-        [string]$CapabilitiesPath
-    )
-
-    if (-not $CapabilitiesPath) { return $RegisteredName }
-
-    $capabilitiesKey = Get-Item -Path $CapabilitiesPath -ErrorAction SilentlyContinue
-    if (-not $capabilitiesKey) { return $RegisteredName }
-
-    $applicationName = $capabilitiesKey.GetValue('ApplicationName')
-    if (-not $applicationName) { return $RegisteredName }
-
-    $resolvedName = Resolve-IndirectString -Value $applicationName
-    if ([string]::IsNullOrWhiteSpace($resolvedName)) { return $RegisteredName }
-
-    return $resolvedName
-}
-
-<#
-.SYNOPSIS
-    Returns all RegisteredApplications entries visible to this user.
-
-.DESCRIPTION
-    Combines per-user and machine-wide registrations. User-scoped entries are
-    preferred when the same application name exists in multiple hives.
-#>
-function Get-RegisteredApplications {
-    [CmdletBinding()]
-    param()
-
-    $registeredApplications = [ordered]@{}
-    $registeredApplicationPaths = @(
-        'HKCU:\SOFTWARE\RegisteredApplications',
-        'HKCU:\SOFTWARE\WOW6432Node\RegisteredApplications',
-        'HKLM:\SOFTWARE\RegisteredApplications',
-        'HKLM:\SOFTWARE\WOW6432Node\RegisteredApplications'
-    )
-
-    foreach ($registeredApplicationPath in $registeredApplicationPaths) {
-        $appsKey = Get-Item -Path $registeredApplicationPath -ErrorAction SilentlyContinue
-        if (-not $appsKey) { continue }
-
-        foreach ($appName in ($appsKey.GetValueNames() | Where-Object { $_ } | Sort-Object)) {
-            if ($registeredApplications.Contains($appName)) { continue }
-            $capabilitiesRawPath = $appsKey.GetValue($appName)
-            $capabilitiesPath = $null
-            if ($capabilitiesRawPath) {
-                $capabilitiesPath = Resolve-CapabilitiesPath -RawPath $capabilitiesRawPath
-            }
-
-            $registeredApplications[$appName] = [PSCustomObject]@{
-                RegisteredName      = $appName
-                DisplayName         = Get-RegisteredApplicationDisplayName -RegisteredName $appName -CapabilitiesPath $capabilitiesPath
-                CapabilitiesRawPath = $capabilitiesRawPath
-                CapabilitiesPath    = $capabilitiesPath
-            }
-        }
-    }
-
-    return $registeredApplications
-}
-
-<#
-.SYNOPSIS
     Reads all registered application association declarations from the registry.
 
 .OUTPUTS
@@ -463,15 +280,15 @@ function Get-RegisteredApplicationAssociations {
     [CmdletBinding()]
     param()
 
-    $registeredApplications = Get-RegisteredApplications
-    if ($registeredApplications.Count -eq 0) {
+    $rawApplications = Get-RegisteredApplications
+    if ($rawApplications.Count -eq 0) {
         Write-ErrorLog 'RegisteredApplications not found in HKCU or HKLM.'
         return @{}
     }
 
     $applications = @{}
-    foreach ($appName in ($registeredApplications.Keys | Sort-Object)) {
-        $registeredApplication = $registeredApplications[$appName]
+    foreach ($appName in ($rawApplications.Keys | Sort-Object)) {
+        $registeredApplication = Resolve-RegisteredApplication -RegisteredApplication $rawApplications[$appName]
         $capabilitiesPath = $registeredApplication.CapabilitiesPath
         if (-not $capabilitiesPath) {
             Write-Detail ('Skipping application ''{0}'': capabilities path not found.' -f $appName)
