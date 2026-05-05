@@ -52,3 +52,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Changed
 
 - The `Application` column in CSV files now also accepts version-stripped friendly names (e.g. `LibreOffice` in addition to `LibreOffice 26.2`).
+
+## get-ucpd-status.ps1
+
+### [1.0.0] - 2026-05-06
+
+#### Added
+
+- New read-only diagnostic script to report UCPD driver presence, service registration, configured start type, current running state, and whether the current PowerShell session is elevated.
+- Color-coded OK/WARNING/ERROR summary output and per-run logging via `SharedUtils`.
+
+## set-ucpd-service.ps1
+
+### [1.0.0] - 2026-05-06
+
+#### Added
+
+- New administrative script to set the UCPD service start type to `Disabled` or restore the Windows default.
+- Before/after state reporting, `-WhatIf` support, attempted immediate stop when disabling, and reboot guidance after changes.
