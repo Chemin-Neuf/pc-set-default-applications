@@ -164,13 +164,19 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '3.4.0'
+$scriptVersion = '3.5.0'
 if ($Version) {
     Write-Host ('get-application-associations.ps1  v{0}' -f $scriptVersion)
     exit 0
 }
 
 if ($Quiet) { $Verbosity = 'None' }
+
+# ============================================================
+# GLOBALS
+# ============================================================
+$Global:ConsoleVerbosity = $Verbosity
+$Global:LogVerbosity     = $LogVerbosity
 
 $exportCsvPath = $null
 if ($ExportCsv) {
@@ -180,6 +186,13 @@ if ($ExportCsv) {
 # ============================================================
 # IMPORTS
 # ============================================================
+$sharedUtilsPath = Join-Path $PSScriptRoot 'SharedUtils.psd1'
+if (-not (Test-Path $sharedUtilsPath)) {
+    Write-Error ('SharedUtils.psd1 not found at: {0}' -f $sharedUtilsPath)
+    exit 1
+}
+Import-Module $sharedUtilsPath -Force
+
 $appRegistryPath = Join-Path $PSScriptRoot 'ApplicationRegistry.psm1'
 if (-not (Test-Path $appRegistryPath)) {
     Write-Error ('ApplicationRegistry.psm1 not found at: {0}' -f $appRegistryPath)
@@ -188,37 +201,14 @@ if (-not (Test-Path $appRegistryPath)) {
 Import-Module $appRegistryPath -Force
 
 # ============================================================
+# LOGGING
+# ============================================================
+Initialize-Log -ScriptName 'get-application-associations' -Version $scriptVersion
+Initialize-ConsoleEncoding
+
+# ============================================================
 # HELPERS
 # ============================================================
-
-<#
-.SYNOPSIS
-    Writes an informational message to the console, respecting Verbosity.
-#>
-function Write-ConsoleInfo {
-    param([Parameter(Mandatory=$true)][string]$Message)
-    if ($Verbosity -ne 'None') { Write-Host $Message -ForegroundColor Cyan }
-}
-
-<#
-.SYNOPSIS
-    Writes a detail message to the console when Verbosity is Detailed.
-#>
-function Write-ConsoleDetail {
-    param([Parameter(Mandatory=$true)][string]$Message)
-    if ($Verbosity -eq 'Detailed') {
-        Write-Host ('    [detail] {0}' -f $Message) -ForegroundColor DarkGray
-    }
-}
-
-<#
-.SYNOPSIS
-    Writes an error message to the console.
-#>
-function Write-ConsoleError {
-    param([Parameter(Mandatory=$true)][string]$Message)
-    Write-Host $Message -ForegroundColor Red
-}
 
 <#
 .SYNOPSIS
@@ -413,11 +403,11 @@ function Write-AssociationCsv {
     $resolvedPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
     $parentDir = [System.IO.Path]::GetDirectoryName($resolvedPath)
     if ($parentDir -and -not (Test-Path $parentDir)) {
-        Write-ConsoleError ('Output directory does not exist: {0}' -f $parentDir)
+        Write-ErrorLog ('Output directory does not exist: {0}' -f $parentDir)
         return $false
     }
     if ((Test-Path $resolvedPath) -and -not $Overwrite) {
-        Write-ConsoleError ('Output file already exists: {0}. Use -OverwriteCsv to replace it.' -f $resolvedPath)
+        Write-ErrorLog ('Output file already exists: {0}. Use -OverwriteCsv to replace it.' -f $resolvedPath)
         return $false
     }
     $prefix = if ($Active) { '' } else { '#' }
@@ -431,7 +421,7 @@ function Write-AssociationCsv {
         $lines.Add(('{0}{1},{2}' -f $prefix, (Format-CsvValue -Value $item.Association), (Format-CsvValue -Value $item.Application)))
     }
     [System.IO.File]::WriteAllLines($resolvedPath, $lines)
-    Write-ConsoleInfo ('CSV written: {0}' -f $resolvedPath)
+    Write-Info ('CSV written: {0}' -f $resolvedPath)
     return $true
 }
 
@@ -446,7 +436,7 @@ if ($PSCmdlet.ParameterSetName -eq 'ListApps') {
             Write-Warning 'No registered applications found.'
             exit 0
         }
-        Write-ConsoleInfo ('{0} friendly application name(s) found across {1} registered entry/entries:' -f $friendlyApplications.Count, $registeredApplications.Count)
+        Write-Info ('{0} friendly application name(s) found across {1} registered entry/entries:' -f $friendlyApplications.Count, $registeredApplications.Count)
         if ($Verbosity -ne 'None') {
             $friendlyApplications | Format-Table -AutoSize | Out-String | Write-Host
         }
@@ -459,7 +449,7 @@ if ($PSCmdlet.ParameterSetName -eq 'ListApps') {
         Write-Warning 'No registered applications found.'
         exit 0
     }
-    Write-ConsoleInfo ('{0} registered application(s):' -f @($names).Count)
+    Write-Info ('{0} registered application(s):' -f @($names).Count)
     $names | Write-Output
     exit 0
 }
@@ -478,7 +468,7 @@ if ($PSCmdlet.ParameterSetName -eq 'ListCategories') {
         Write-Warning 'No perceived-type categories found.'
         exit 0
     }
-    Write-ConsoleInfo ('{0} category/categories found:' -f @($categories).Count)
+    Write-Info ('{0} category/categories found:' -f @($categories).Count)
     $categories | Write-Output
     exit 0
 }
@@ -496,7 +486,7 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
     $selectedApplications = Resolve-RegisteredApplicationEntries -Application $App -RegisteredApplications $registeredApplications
     if ($selectedApplications.Count -eq 0) {
         Write-Error ('Application not found: {0}' -f $App)
-        Write-ConsoleInfo 'Run with -ListApps or -ListAppsRaw to see available application names.'
+        Write-Info 'Run with -ListApps or -ListAppsRaw to see available application names.'
         exit 1
     }
 
@@ -507,11 +497,11 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
 
     foreach ($selectedApplication in $selectedApplications) {
         if (-not $selectedApplication.CapabilitiesPath) {
-            Write-ConsoleDetail ('Skipping ''{0}'': capabilities registry key not found. Raw path from registry: {1}' -f $selectedApplication.RegisteredName, $selectedApplication.CapabilitiesRawPath)
+            Write-Detail ('Skipping ''{0}'': capabilities registry key not found. Raw path from registry: {1}' -f $selectedApplication.RegisteredName, $selectedApplication.CapabilitiesRawPath)
             continue
         }
 
-        Write-ConsoleDetail ('Capabilities subkey for ''{0}'': {1}' -f $selectedApplication.RegisteredName, $selectedApplication.CapabilitiesRawPath)
+        Write-Detail ('Capabilities subkey for ''{0}'': {1}' -f $selectedApplication.RegisteredName, $selectedApplication.CapabilitiesRawPath)
 
         # File associations
         $fileAssocPath = Join-Path $selectedApplication.CapabilitiesPath 'FileAssociations'
@@ -530,9 +520,9 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
                 })
                 $seenAssociations[$associationKey] = $true
             }
-            Write-ConsoleDetail ('{0} file association(s) found for ''{1}''.' -f $values.Count, $selectedApplication.RegisteredName)
+            Write-Detail ('{0} file association(s) found for ''{1}''.' -f $values.Count, $selectedApplication.RegisteredName)
         } else {
-            Write-ConsoleDetail ('No FileAssociations subkey found for ''{0}''.' -f $selectedApplication.RegisteredName)
+            Write-Detail ('No FileAssociations subkey found for ''{0}''.' -f $selectedApplication.RegisteredName)
         }
 
         # URL / protocol associations
@@ -552,9 +542,9 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
                 })
                 $seenAssociations[$associationKey] = $true
             }
-            Write-ConsoleDetail ('{0} URL association(s) found for ''{1}''.' -f $values.Count, $selectedApplication.RegisteredName)
+            Write-Detail ('{0} URL association(s) found for ''{1}''.' -f $values.Count, $selectedApplication.RegisteredName)
         } else {
-            Write-ConsoleDetail ('No URLAssociations subkey found for ''{0}''.' -f $selectedApplication.RegisteredName)
+            Write-Detail ('No URLAssociations subkey found for ''{0}''.' -f $selectedApplication.RegisteredName)
         }
     }
 
@@ -563,7 +553,7 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
         exit 0
     }
 
-    Write-ConsoleInfo ('{0} association(s) found for: {1}' -f $results.Count, $displayName)
+    Write-Info ('{0} association(s) found for: {1}' -f $results.Count, $displayName)
     if ($Verbosity -ne 'None') {
         $results | Sort-Object Type, Association | Format-Table -AutoSize | Out-String | Write-Host
     }
@@ -605,7 +595,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Category') {
 
     if ($results.Count -eq 0) {
         Write-Warning ('No extensions found for category: {0}' -f $Category)
-        Write-ConsoleInfo 'Run with -ListCategories to see available categories.'
+        Write-Info 'Run with -ListCategories to see available categories.'
         exit 0
     }
 
@@ -616,7 +606,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Category') {
         }
     }
 
-    Write-ConsoleInfo ('{0} extension(s) found for category: {1}' -f $results.Count, $Category)
+    Write-Info ('{0} extension(s) found for category: {1}' -f $results.Count, $Category)
     if ($Verbosity -ne 'None') {
         $results | Sort-Object Association | Format-Table -AutoSize | Out-String | Write-Host
     }

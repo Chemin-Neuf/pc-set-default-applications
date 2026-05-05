@@ -214,6 +214,17 @@ function Get-StatusSymbol {
 
 <#
 .SYNOPSIS
+    Returns whether the current PowerShell session is elevated.
+
+.OUTPUTS
+    System.Boolean
+#>
+function Test-AdminPrivilege {
+    return ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+<#
+.SYNOPSIS
     Displays script or module version information from the manifest.
 
 .PARAMETER ScriptName
@@ -273,4 +284,4 @@ function Initialize-ConsoleEncoding {
 }
 
 # Export all functions
-Export-ModuleMember -Function Write-Log, Write-Status, Write-Info, Write-Warn, Write-ErrorLog, Write-Success, Write-Detail, Initialize-Log, Get-StatusSymbol, Get-ScriptVersion, Initialize-ConsoleEncoding
+Export-ModuleMember -Function Write-Log, Write-Status, Write-Info, Write-Warn, Write-ErrorLog, Write-Success, Write-Detail, Initialize-Log, Get-StatusSymbol, Test-AdminPrivilege, Get-ScriptVersion, Initialize-ConsoleEncoding

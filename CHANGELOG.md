@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## get-application-associations.ps1
 
+### [3.5.0] - 2026-05-05
+
+#### Added
+
+- Logging support: `LogVerbosity` parameter now writes to a log file via `SharedUtils`.
+
+#### Changed
+
+- Imports `SharedUtils.psd1` (module manifest) instead of relying on local console-output functions.
+- Console output now uses `Write-Info`, `Write-Detail`, and `Write-ErrorLog` from `SharedUtils`.
+- Console encoding initialized to UTF-8 at startup via `Initialize-ConsoleEncoding`.
+
 ### [3.4.0] - 2026-05-04
 
 #### Changed
@@ -27,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `-ListApps` no longer shows AppX entries that could not be resolved to a friendly name (those whose display name remained the raw `AppXxxxxxxxx` hash). Use `-ListAppsRaw` to see all registered entries including these unresolved ones.
 
 ## set-default-applications.ps1
+
+### [2.8.0] - 2026-05-05
+
+#### Changed
+
+- Imports `SharedUtils.psd1` (module manifest) instead of `SharedUtils.psm1` directly.
+- Console encoding initialized to UTF-8 at startup via `Initialize-ConsoleEncoding`.
 
 ### [2.4.0] - 2026-05-04
 

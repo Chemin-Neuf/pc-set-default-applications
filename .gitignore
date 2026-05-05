@@ -1,2 +1,3 @@
 # Ignore log directory
 logs/
+.vscode/settings.json

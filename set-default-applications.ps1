@@ -91,7 +91,7 @@
 
 .NOTES
     File:           set-default-applications.ps1
-    Version:        2.7.0
+    Version:        2.8.0
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
     Major Contributors: GPT-5.4 (GitHub Copilot)
     License:        GPL-3.0-only
@@ -131,7 +131,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '2.7.0'
+$scriptVersion = '2.8.0'
 if ($Version) {
     Write-Host ('set-default-applications.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -194,9 +194,9 @@ $Global:LogVerbosity     = $LogVerbosity
 # ============================================================
 # IMPORTS
 # ============================================================
-$sharedUtilsPath = Join-Path $PSScriptRoot 'SharedUtils.psm1'
+$sharedUtilsPath = Join-Path $PSScriptRoot 'SharedUtils.psd1'
 if (-not (Test-Path $sharedUtilsPath)) {
-    Write-Error ('SharedUtils.psm1 not found at: {0}' -f $sharedUtilsPath)
+    Write-Error ('SharedUtils.psd1 not found at: {0}' -f $sharedUtilsPath)
     exit 1
 }
 Import-Module $sharedUtilsPath -Force
@@ -212,6 +212,7 @@ Import-Module $appRegistryPath -Force
 # LOGGING
 # ============================================================
 Initialize-Log -ScriptName 'set-default-applications' -Version $scriptVersion
+Initialize-ConsoleEncoding
 
 # ============================================================
 # FUNCTIONS
