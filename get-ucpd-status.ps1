@@ -1,6 +1,7 @@
 # Copyright (C) Chemin-Neuf IT Team
 # SPDX-License-Identifier: GPL-3.0-only
 # Full license text: see LICENSE at the repository root
+
 <#
 .SYNOPSIS
     Reports the current state of the UCPD (UserChoice Protection Driver) on this machine.
