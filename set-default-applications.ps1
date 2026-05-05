@@ -42,6 +42,10 @@
     When provided, the automatic resolution logic (cache / download / network)
     is skipped entirely.
 
+.PARAMETER SetUserFTAVersion
+    Checks whether SetUserFTA.exe is present at the configured cache path,
+    reports its version if found, then exits. Does not modify any association.
+
 .PARAMETER Verbosity
     Controls the amount of output written to the console.
     None     - no console output.
@@ -80,9 +84,14 @@
 
     Runs with full console output but reduced log verbosity.
 
+.EXAMPLE
+    .\set-default-applications.ps1 -SetUserFTAVersion
+
+    Reports whether SetUserFTA.exe is present at the cache path and its version.
+
 .NOTES
     File:           set-default-applications.ps1
-    Version:        2.2.0
+    Version:        2.7.0
     Author:         Claude Sonnet 4.6 (GitHub Copilot)
     Major Contributors: GPT-5.4 (GitHub Copilot)
     License:        GPL-3.0-only
@@ -102,6 +111,9 @@ param(
     [string]$SetUserFTAPath = '',
 
     [Parameter()]
+    [switch]$SetUserFTAVersion,
+
+    [Parameter()]
     [ValidateSet('None', 'Normal', 'Detailed')]
     [string]$Verbosity = 'Normal',
 
@@ -119,7 +131,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '2.4.0'
+$scriptVersion = '2.7.0'
 if ($Version) {
     Write-Host ('set-default-applications.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -128,9 +140,10 @@ if ($Version) {
 # ============================================================
 # CONFIGURATION
 # ============================================================
-$setUserFTACachePath   = 'C:\Support\SetUserFTA.exe'
-$setUserFTADownloadUrl = 'https://setuserfta.com/SetUserFTA.zip'
-$setUserFTANetworkPath = '\\your-server\your-share\SetUserFTA.exe'
+$setUserFTACachePath        = 'C:\Support\SetUserFTA.exe'
+$setUserFTADownloadUrl      = 'https://setuserfta.com/SetUserFTA.zip'
+$setUserFTANetworkPath      = '\\your-server\your-share\SetUserFTA.exe'
+$setUserFTAKnownFreeVersion = '1.8.4'   # latest personal/free edition — update this when a new version is released
 
 if (-not $ConfigPath) {
     if ($ConfigType -eq 'TXT') {
@@ -139,6 +152,36 @@ if (-not $ConfigPath) {
     else {
         $ConfigPath = Join-Path $PSScriptRoot 'default-applications.csv'
     }
+}
+
+if ($SetUserFTAVersion) {
+    if (Test-Path $setUserFTACachePath) {
+        $cachedVersion = (Get-Item $setUserFTACachePath).VersionInfo.FileVersion
+        Write-Host ('SetUserFTA.exe found at:          {0}' -f $setUserFTACachePath)
+        Write-Host ('Version installed:                {0}' -f $cachedVersion)
+        Write-Host ('Latest known free version:        {0}' -f $setUserFTAKnownFreeVersion)
+
+        try {
+            $installedVer = [System.Version]$cachedVersion
+            $knownVer     = [System.Version]$setUserFTAKnownFreeVersion
+            if ($installedVer -lt $knownVer) {
+                Write-Warning ('Installed version ({0}) is older than the latest known free version ({1}). Consider updating SetUserFTA.exe.' -f $cachedVersion, $setUserFTAKnownFreeVersion)
+            }
+            elseif ($installedVer -gt $knownVer) {
+                Write-Host ('Installed version ({0}) is newer than the free version tracked by this script ({1}). Update $setUserFTAKnownFreeVersion in the CONFIGURATION section.' -f $cachedVersion, $setUserFTAKnownFreeVersion) -ForegroundColor Cyan
+            }
+            else {
+                Write-Host 'Installed version matches the latest known free version.' -ForegroundColor Green
+            }
+        }
+        catch {
+            Write-Warning ('Could not parse version string for comparison: {0}' -f $cachedVersion)
+        }
+    }
+    else {
+        Write-Host ('SetUserFTA.exe not found at: {0}' -f $setUserFTACachePath)
+    }
+    exit 0
 }
 
 # ============================================================
@@ -176,7 +219,28 @@ Initialize-Log -ScriptName 'set-default-applications' -Version $scriptVersion
 
 <#
 .SYNOPSIS
-    Locates or obtains SetUserFTA.exe, caching it at the specified path.
+    Returns the file version of an executable as a System.Version, or $null if it
+    cannot be read or parsed.
+
+.PARAMETER Path
+    Full path to the executable.
+#>
+function Get-ExeFileVersion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path
+    )
+    try {
+        $raw = (Get-Item $Path -ErrorAction Stop).VersionInfo.FileVersion
+        return [System.Version]$raw
+    }
+    catch { return $null }
+}
+
+<#
+.SYNOPSIS
+    Locates or obtains SetUserFTA.exe at or above the required minimum version.
 
 .PARAMETER CachePath
     Target path where SetUserFTA.exe should be stored and reused.
@@ -186,6 +250,11 @@ Initialize-Log -ScriptName 'set-default-applications' -Version $scriptVersion
 
 .PARAMETER NetworkPath
     UNC path to a SetUserFTA.exe file used as a fallback if download fails.
+
+.PARAMETER MinimumVersion
+    Minimum acceptable version string (e.g. '1.8.4'). If the cached copy is
+    below this version, a fresh copy is obtained. The script proceeds with
+    whatever version is ultimately found, with a warning when it is outdated.
 
 .OUTPUTS
     Full path to SetUserFTA.exe if resolved, otherwise $null.
@@ -200,13 +269,23 @@ function Resolve-SetUserFTA {
         [string]$DownloadUrl,
 
         [Parameter(Mandatory=$true)]
-        [string]$NetworkPath
+        [string]$NetworkPath,
+
+        [Parameter(Mandatory=$true)]
+        [string]$MinimumVersion
     )
 
-    # 1. Already cached
+    $minVer          = [System.Version]$MinimumVersion
+    $outdatedMessage = ('Proceeding anyway — associations for UCPD-protected extensions (e.g. .pdf) may not be applied correctly.' )
+
+    # 1. Already cached — accept only if version meets the minimum
     if (Test-Path $CachePath) {
-        Write-Detail ('SetUserFTA found at cache path: {0}' -f $CachePath)
-        return $CachePath
+        $cachedVer = Get-ExeFileVersion $CachePath
+        if ($null -ne $cachedVer -and $cachedVer -ge $minVer) {
+            Write-Detail ('SetUserFTA found at cache path (v{0}): {1}' -f $cachedVer, $CachePath)
+            return $CachePath
+        }
+        Write-Warn ('Cached SetUserFTA (v{0}) is older than the minimum required version (v{1}). Attempting to obtain a newer copy.' -f $cachedVer, $MinimumVersion)
     }
 
     # Determine a writable directory for the cache
@@ -228,26 +307,35 @@ function Resolve-SetUserFTA {
 
     # 2. Try downloading from the internet
     Write-Info ('Attempting to download SetUserFTA from: {0}' -f $DownloadUrl)
-    $zipPath = Join-Path $env:TEMP 'SetUserFTA.zip'
+    $zipPath        = Join-Path $env:TEMP 'SetUserFTA.zip'
+    $downloadedPath = $null
     try {
         Invoke-WebRequest -Uri $DownloadUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
         Expand-Archive -Path $zipPath -DestinationPath $cacheDir -Force -ErrorAction Stop
         Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
 
+        $resolvedDownload = $null
         if (Test-Path $effectiveCachePath) {
-            Write-Success ('SetUserFTA downloaded and extracted to: {0}' -f $effectiveCachePath)
-            return $effectiveCachePath
+            $resolvedDownload = $effectiveCachePath
+        }
+        else {
+            $found = Get-ChildItem -Path $cacheDir -Filter 'SetUserFTA.exe' -Recurse -ErrorAction SilentlyContinue |
+                     Select-Object -First 1
+            if ($found) { $resolvedDownload = $found.FullName }
         }
 
-        # Zip may have extracted to a subfolder — search for the exe
-        $found = Get-ChildItem -Path $cacheDir -Filter 'SetUserFTA.exe' -Recurse -ErrorAction SilentlyContinue |
-                 Select-Object -First 1
-        if ($found) {
-            Write-Success ('SetUserFTA found after extraction at: {0}' -f $found.FullName)
-            return $found.FullName
+        if ($resolvedDownload) {
+            $downloadedVer = Get-ExeFileVersion $resolvedDownload
+            if ($null -ne $downloadedVer -and $downloadedVer -ge $minVer) {
+                Write-Success ('SetUserFTA downloaded (v{0}): {1}' -f $downloadedVer, $resolvedDownload)
+                return $resolvedDownload
+            }
+            Write-Warn ('Downloaded SetUserFTA (v{0}) is older than the minimum required version (v{1}). Falling back to network share.' -f $downloadedVer, $MinimumVersion)
+            $downloadedPath = $resolvedDownload
         }
-
-        Write-Warn 'Download succeeded but SetUserFTA.exe was not found after extraction.'
+        else {
+            Write-Warn 'Download succeeded but SetUserFTA.exe was not found after extraction.'
+        }
     }
     catch {
         Write-Warn ('Download failed: {0}' -f $_.Exception.Message)
@@ -258,11 +346,31 @@ function Resolve-SetUserFTA {
     Write-Info ('Attempting to copy SetUserFTA from network: {0}' -f $NetworkPath)
     try {
         Copy-Item -Path $NetworkPath -Destination $effectiveCachePath -Force -ErrorAction Stop
-        Write-Success ('SetUserFTA copied from network to: {0}' -f $effectiveCachePath)
+        $networkVer = Get-ExeFileVersion $effectiveCachePath
+        if ($null -ne $networkVer -and $networkVer -lt $minVer) {
+            Write-Warn ('Network SetUserFTA (v{0}) is older than the minimum required version (v{1}). {2}' -f $networkVer, $MinimumVersion, $outdatedMessage)
+        }
+        else {
+            Write-Success ('SetUserFTA copied from network (v{0}): {1}' -f $networkVer, $effectiveCachePath)
+        }
         return $effectiveCachePath
     }
     catch {
         Write-Warn ('Network copy failed: {0}' -f $_.Exception.Message)
+    }
+
+    # 4. Last resort: use the downloaded copy even though it is outdated
+    if ($null -ne $downloadedPath -and (Test-Path $downloadedPath)) {
+        $downloadedVer = Get-ExeFileVersion $downloadedPath
+        Write-Warn ('Using downloaded SetUserFTA (v{0}), which is older than the minimum required version (v{1}). {2}' -f $downloadedVer, $MinimumVersion, $outdatedMessage)
+        return $downloadedPath
+    }
+
+    # 5. Very last resort: stale cache
+    if (Test-Path $CachePath) {
+        $cachedVer = Get-ExeFileVersion $CachePath
+        Write-Warn ('Using stale cached SetUserFTA (v{0}), which is older than the minimum required version (v{1}). {2}' -f $cachedVer, $MinimumVersion, $outdatedMessage)
+        return $CachePath
     }
 
     return $null
@@ -503,14 +611,16 @@ $exePath = $SetUserFTAPath
 if (-not $exePath) {
     $exePath = Resolve-SetUserFTA -CachePath $setUserFTACachePath `
                                    -DownloadUrl $setUserFTADownloadUrl `
-                                   -NetworkPath $setUserFTANetworkPath
+                                   -NetworkPath $setUserFTANetworkPath `
+                                   -MinimumVersion $setUserFTAKnownFreeVersion
 }
 
 if (-not $exePath -or -not (Test-Path $exePath)) {
     Write-ErrorLog 'SetUserFTA.exe could not be found or obtained. Aborting.'
     exit 1
 }
-Write-Info ('Using SetUserFTA: {0}' -f $exePath)
+$setUserFTAFileVersion = (Get-Item $exePath).VersionInfo.FileVersion
+Write-Info ('Using SetUserFTA: {0} (v{1})' -f $exePath, $setUserFTAFileVersion)
 
 $applicationMap = Get-RegisteredApplicationAssociations
 if ($applicationMap.Count -eq 0) {
