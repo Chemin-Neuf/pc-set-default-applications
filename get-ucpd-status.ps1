@@ -277,7 +277,7 @@ $summarySymbol  = Get-StatusSymbol -Status $overallStatus
 $summaryMessage = switch ($overallStatus) {
     'OK'      { 'UCPD is not active. No interference expected with default application settings.' }
     'WARNING' { 'UCPD is present but not actively running. SetUserFTA 1.8.4+ handles this correctly.' }
-    'ERROR'   { 'UCPD is active. Use SetUserFTA 1.8.4+ or run set-ucpd-service.ps1 -StartType Disabled (requires admin + reboot).' }
+    'ERROR'   { 'UCPD is active. Use SetUserFTA 1.8.4+ or run set-ucpd-service.ps1 -State Disabled (requires admin + reboot).' }
     default   { 'UCPD status could not be fully determined.' }
 }
 

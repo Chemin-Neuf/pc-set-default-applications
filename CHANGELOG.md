@@ -71,6 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## set-ucpd-service.ps1
 
+### [2.0.0] - 2026-05-06
+
+#### Changed
+
+- Renamed the `StartType` parameter to `State` to reflect the script's higher-level purpose: changing the effective UCPD state, not only the service start type.
+
 ### [1.0.1] - 2026-05-06
 
 #### Fixed

@@ -4,23 +4,25 @@
 
 <#
 .SYNOPSIS
-    Sets the Windows UCPD (UserChoice Protection Driver) service start type.
+    Sets the Windows UCPD (UserChoice Protection Driver) state.
 
 .DESCRIPTION
-    Configures the start type of the UCPD service that protects default application
-    UserChoice registry keys from third-party modification. Requires administrator rights.
-    Reports the state before and after the change. A reboot is required for any change
-    to take full effect. When disabling, a stop of the running driver is attempted;
+    Changes the effective state of the UCPD protection mechanism that protects default
+    application UserChoice registry keys from third-party modification. Requires
+    administrator rights. This includes configuring the service start type and, when
+    disabling, attempting to stop the running driver immediately. Reports the state
+    before and after the change. A reboot is required for any change to take full
+    effect. When disabling, a stop of the running driver is attempted;
     kernel-mode drivers typically cannot be stopped without a reboot, so the stop attempt
     may fail gracefully and a reboot reminder is always emitted.
     Results are logged to a logs\ subfolder next to the script, with fallback to %TEMP%.
 
-.PARAMETER StartType
-    Target start type for the UCPD service.
-    Disabled - Sets start type to Disabled and attempts to stop the running driver
-               immediately. A reboot is required if the stop attempt fails.
-    Default  - Restores the Windows default start type (Automatic). A reboot is
-               required for the driver to load if it is not already running.
+.PARAMETER State
+    Target UCPD state.
+    Disabled - Configures the service start type to Disabled and attempts to stop the
+               running driver immediately. A reboot is required if the stop attempt fails.
+    Default  - Restores the Windows default configuration (Automatic start type). A reboot
+               is required for the driver to load if it is not already running.
 
 .PARAMETER Verbosity
     Controls the amount of output written to the console.
@@ -41,17 +43,17 @@
     Displays the script name and version, then exits.
 
 .EXAMPLE
-    .\set-ucpd-service.ps1 -StartType Disabled
+    .\set-ucpd-service.ps1 -State Disabled
 
     Disables the UCPD service and attempts to stop it immediately.
 
 .EXAMPLE
-    .\set-ucpd-service.ps1 -StartType Default
+    .\set-ucpd-service.ps1 -State Default
 
     Restores the UCPD service to the Windows default start type (Automatic).
 
 .EXAMPLE
-    .\set-ucpd-service.ps1 -StartType Disabled -WhatIf
+    .\set-ucpd-service.ps1 -State Disabled -WhatIf
 
     Shows what would be changed without applying anything.
 
@@ -70,7 +72,7 @@
 param(
     [Parameter(Mandatory=$true)]
     [ValidateSet('Disabled', 'Default')]
-    [string]$StartType,
+    [string]$State,
 
     [Parameter()]
     [ValidateSet('None', 'Normal', 'Detailed')]
@@ -91,7 +93,7 @@ param(
 # VERSION
 # ============================================================
 # Single source of truth for this script version.
-$scriptVersion = '1.0.1'
+$scriptVersion = '2.0.0'
 if ($Version) {
     Write-Host ('set-ucpd-service.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -137,7 +139,7 @@ Initialize-ConsoleEncoding
 # ============================================================
 if (-not (Test-AdminPrivilege)) {
     Write-ErrorLog 'This script requires administrator rights.'
-    Write-ErrorLog ('Re-run from an elevated PowerShell prompt: .\set-ucpd-service.ps1 -StartType {0}' -f $StartType)
+    Write-ErrorLog ('Re-run from an elevated PowerShell prompt: .\set-ucpd-service.ps1 -State {0}' -f $State)
     exit 1
 }
 
@@ -212,7 +214,7 @@ function Get-UcpdCurrentState {
 # ============================================================
 Write-Info ('set-ucpd-service.ps1 v{0} starting' -f $scriptVersion)
 Write-Detail ('Log file: {0}' -f $Global:LogFile)
-Write-Info ('Requested start type: {0}' -f $StartType)
+Write-Info ('Requested state: {0}' -f $State)
 
 # --- Verify service is registered ---
 if (-not (Test-Path $ucpdRegistryPath)) {
@@ -225,13 +227,13 @@ $before = Get-UcpdCurrentState
 Write-Info ('Before - Start type: {0} | Status: {1}' -f $before.StartTypeLabel, $before.RunningStatus)
 
 # --- Resolve target values ---
-$targetScToken   = if ($StartType -eq 'Disabled') { 'disabled' } else { $ucpdDefaultScToken }
-$targetStartDword = if ($StartType -eq 'Disabled') { 4 } else { $ucpdDefaultStartDword }
+$targetScToken   = if ($State -eq 'Disabled') { 'disabled' } else { $ucpdDefaultScToken }
+$targetStartDword = if ($State -eq 'Disabled') { 4 } else { $ucpdDefaultStartDword }
 
 # --- Skip if already at target ---
 if ($before.StartTypeDword -eq $targetStartDword) {
-    Write-Info ('UCPD service start type is already {0}. No change needed.' -f $before.StartTypeLabel)
-    if ($StartType -eq 'Disabled' -and $before.RunningStatus -eq 'Running') {
+    Write-Info ('UCPD state is already {0}. No configuration change needed.' -f $State)
+    if ($State -eq 'Disabled' -and $before.RunningStatus -eq 'Running') {
         Write-Warn 'The driver is still running. A reboot is required for it to stop.'
     }
     exit 0
@@ -241,10 +243,10 @@ if ($before.StartTypeDword -eq $targetStartDword) {
 $changeApplied = $false
 
 if ($PSCmdlet.ShouldProcess(
-    ('UCPD service - start type: {0} -> {1}' -f $before.StartTypeLabel, $StartType),
+    ('UCPD state: {0} -> {1}' -f $before.StartTypeLabel, $State),
         'Set')) {
 
-    Write-Info ('Setting UCPD service start type to {0}...' -f $StartType)
+    Write-Info ('Applying UCPD state {0}...' -f $State)
     try {
         $scOutput = & sc.exe config $ucpdServiceName start= $targetScToken 2>&1
         if ($LASTEXITCODE -ne 0) {
@@ -252,7 +254,7 @@ if ($PSCmdlet.ShouldProcess(
             exit 1
         }
         Write-Detail ('sc.exe output: {0}' -f ($scOutput -join ' '))
-        Write-Success ('UCPD service start type set to {0}.' -f $StartType)
+        Write-Success ('UCPD state set to {0}.' -f $State)
         $changeApplied = $true
     }
     catch {
@@ -261,7 +263,7 @@ if ($PSCmdlet.ShouldProcess(
     }
 
     # --- Attempt immediate stop when disabling ---
-    if ($StartType -eq 'Disabled' -and $before.RunningStatus -eq 'Running') {
+    if ($State -eq 'Disabled' -and $before.RunningStatus -eq 'Running') {
         Write-Info 'Attempting to stop the UCPD driver (kernel drivers may require a reboot to stop)...'
         try {
             Stop-Service -Name $ucpdServiceName -Force -ErrorAction Stop
