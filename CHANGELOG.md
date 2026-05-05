@@ -55,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## get-ucpd-status.ps1
 
+### [1.0.1] - 2026-05-06
+
+#### Fixed
+
+- Switched to `SharedUtils.psd1` and initialized console output encoding to UTF-8, matching the existing scripts in this repository.
+- Replaced user-facing Unicode dash characters with ASCII-only output to avoid mojibake in legacy console hosts.
+
 ### [1.0.0] - 2026-05-06
 
 #### Added
@@ -63,6 +70,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Color-coded OK/WARNING/ERROR summary output and per-run logging via `SharedUtils`.
 
 ## set-ucpd-service.ps1
+
+### [1.0.1] - 2026-05-06
+
+#### Fixed
+
+- Switched to `SharedUtils.psd1` and initialized console output encoding to UTF-8, matching the existing scripts in this repository.
+- Replaced user-facing Unicode dash characters with ASCII-only output to avoid mojibake in legacy console hosts.
 
 ### [1.0.0] - 2026-05-06
 

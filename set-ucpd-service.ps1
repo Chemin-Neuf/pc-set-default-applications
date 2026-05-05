@@ -90,7 +90,7 @@ param(
 # VERSION
 # ============================================================
 # Single source of truth for this script version.
-$scriptVersion = '1.0.0'
+$scriptVersion = '1.0.1'
 if ($Version) {
     Write-Host ('set-ucpd-service.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -118,9 +118,9 @@ $Global:LogVerbosity     = $LogVerbosity
 # ============================================================
 # IMPORTS
 # ============================================================
-$sharedUtilsPath = Join-Path $PSScriptRoot 'SharedUtils.psm1'
+$sharedUtilsPath = Join-Path $PSScriptRoot 'SharedUtils.psd1'
 if (-not (Test-Path $sharedUtilsPath)) {
-    Write-Error ('SharedUtils.psm1 not found at: {0}' -f $sharedUtilsPath)
+    Write-Error ('SharedUtils.psd1 not found at: {0}' -f $sharedUtilsPath)
     exit 1
 }
 Import-Module $sharedUtilsPath -Force
@@ -129,6 +129,7 @@ Import-Module $sharedUtilsPath -Force
 # LOGGING
 # ============================================================
 Initialize-Log -ScriptName 'set-ucpd-service' -Version $scriptVersion
+Initialize-ConsoleEncoding
 
 # ============================================================
 # ELEVATION CHECK
@@ -220,7 +221,7 @@ if (-not (Test-Path $ucpdRegistryPath)) {
 
 # --- Before state ---
 $before = Get-UcpdCurrentState
-Write-Info ('Before — Start type: {0} | Status: {1}' -f $before.StartTypeLabel, $before.RunningStatus)
+Write-Info ('Before - Start type: {0} | Status: {1}' -f $before.StartTypeLabel, $before.RunningStatus)
 
 # --- Resolve target values ---
 $targetScToken   = if ($StartType -eq 'Disabled') { 'disabled' } else { $ucpdDefaultScToken }
@@ -239,7 +240,7 @@ if ($before.StartTypeDword -eq $targetStartDword) {
 $changeApplied = $false
 
 if ($PSCmdlet.ShouldProcess(
-        ('UCPD service — start type: {0} -> {1}' -f $before.StartTypeLabel, $StartType),
+    ('UCPD service - start type: {0} -> {1}' -f $before.StartTypeLabel, $StartType),
         'Set')) {
 
     Write-Info ('Setting UCPD service start type to {0}...' -f $StartType)
@@ -275,7 +276,7 @@ if ($PSCmdlet.ShouldProcess(
 # --- After state and reboot reminder ---
 if ($changeApplied) {
     $after = Get-UcpdCurrentState
-    Write-Info ('After  — Start type: {0} | Status: {1}' -f $after.StartTypeLabel, $after.RunningStatus)
+    Write-Info ('After  - Start type: {0} | Status: {1}' -f $after.StartTypeLabel, $after.RunningStatus)
     Write-Warn 'A reboot is required for this change to take full effect.'
 }
 

@@ -79,7 +79,7 @@ param(
 # VERSION
 # ============================================================
 # Single source of truth for this script version.
-$scriptVersion = '1.0.0'
+$scriptVersion = '1.0.1'
 if ($Version) {
     Write-Host ('get-ucpd-status.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -102,9 +102,9 @@ $Global:LogVerbosity     = $LogVerbosity
 # ============================================================
 # IMPORTS
 # ============================================================
-$sharedUtilsPath = Join-Path $PSScriptRoot 'SharedUtils.psm1'
+$sharedUtilsPath = Join-Path $PSScriptRoot 'SharedUtils.psd1'
 if (-not (Test-Path $sharedUtilsPath)) {
-    Write-Error ('SharedUtils.psm1 not found at: {0}' -f $sharedUtilsPath)
+    Write-Error ('SharedUtils.psd1 not found at: {0}' -f $sharedUtilsPath)
     exit 1
 }
 Import-Module $sharedUtilsPath -Force
@@ -113,6 +113,7 @@ Import-Module $sharedUtilsPath -Force
 # LOGGING
 # ============================================================
 Initialize-Log -ScriptName 'get-ucpd-status' -Version $scriptVersion
+Initialize-ConsoleEncoding
 
 # ============================================================
 # FUNCTIONS
@@ -180,7 +181,7 @@ if ($isAdmin) {
 }
 else {
     Write-CheckResult -Label 'Running as administrator' `
-                      -Value 'No — set-ucpd-service.ps1 requires elevation to make changes' `
+                      -Value 'No - set-ucpd-service.ps1 requires elevation to make changes' `
                       -Status 'WARNING'
     if ($overallStatus -eq 'OK') { $overallStatus = 'WARNING' }
 }
@@ -190,13 +191,13 @@ $driverPresent = Test-Path $ucpdDriverPath
 if ($driverPresent) {
     $driverVersion = (Get-Item $ucpdDriverPath -ErrorAction SilentlyContinue).VersionInfo.FileVersion
     Write-CheckResult -Label 'Driver file present' `
-                      -Value ('Yes — {0} (v{1})' -f $ucpdDriverPath, $driverVersion) `
+                      -Value ('Yes - {0} (v{1})' -f $ucpdDriverPath, $driverVersion) `
                       -Status 'WARNING'
     if ($overallStatus -eq 'OK') { $overallStatus = 'WARNING' }
 }
 else {
     Write-CheckResult -Label 'Driver file present' `
-                      -Value ('No — {0}' -f $ucpdDriverPath) `
+                      -Value ('No - {0}' -f $ucpdDriverPath) `
                       -Status 'OK'
 }
 
@@ -244,7 +245,7 @@ if ($serviceRegistered) {
     }
 }
 else {
-    Write-Detail 'Skipping start type check — service not registered.'
+    Write-Detail 'Skipping start type check - service not registered.'
 }
 
 # --- Check 5: Current running status ---
@@ -267,7 +268,7 @@ if ($serviceRegistered) {
     }
 }
 else {
-    Write-Detail 'Skipping running status check — service not registered.'
+    Write-Detail 'Skipping running status check - service not registered.'
 }
 
 # --- Summary ---
@@ -290,6 +291,6 @@ $summaryLogLevel = switch ($overallStatus) {
     'ERROR' { 'ERROR'   }
     default { 'WARN'    }
 }
-Write-Log ('Summary: {0} — {1}' -f $overallStatus, $summaryMessage) -Level $summaryLogLevel
+Write-Log ('Summary: {0} - {1}' -f $overallStatus, $summaryMessage) -Level $summaryLogLevel
 
 exit 0
