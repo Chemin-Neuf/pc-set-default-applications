@@ -15,7 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Get-UcpdStatus` returns a structured object with `IsActive`, `DriverPresent`, `ServiceRegistered`, `StartTypeLabel`, `RunningStatus`, and `IsAdmin`.
 - `Set-UcpdState` returns a structured object with `Success`, `Reason`, `RequiresReboot`, and `Message`. Never calls `exit`; callers decide how to handle results.
 
+## SharedUtils.psm1
+
+### [1.0.2] - 2026-05-06
+
+#### Fixed
+
+- `Initialize-Log` now creates a fresh logfile for each script execution, even when multiple scripts run in the same PowerShell session. Previously, later runs could keep appending to the first logfile created in that session.
+
 ## get-application-associations.ps1
+
+### [3.6.0] - 2026-05-06
+
+#### Changed
+
+- `LogVerbosity` now defaults to `Detailed`, matching the repository PowerShell standard and enabling per-run log creation by default.
+- Updated the script help text to document the default logging behavior accurately.
 
 ### [3.5.0] - 2026-05-05
 

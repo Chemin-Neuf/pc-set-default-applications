@@ -155,35 +155,33 @@ function Initialize-Log {
     )
     if (-not $Global:LogVerbosity) { $Global:LogVerbosity = 'Detailed' }
     if ($Global:LogVerbosity -eq 'None') { return }
-    if (-not $Global:LogFile) {
-        $ts = (Get-Date).ToString('yyyyMMdd_HHmmss')
-        $defaultLogsDir = Join-Path -Path $PSScriptRoot -ChildPath 'logs'
-        $logsDir = $defaultLogsDir
+    $ts = (Get-Date).ToString('yyyyMMdd_HHmmss')
+    $defaultLogsDir = Join-Path -Path $PSScriptRoot -ChildPath 'logs'
+    $logsDir = $defaultLogsDir
 
-        try {
-            if (-not (Test-Path -Path $logsDir -PathType Container)) {
-                New-Item -ItemType Directory -Path $logsDir -Force -ErrorAction Stop | Out-Null
-            }
-
-            $probeFile = Join-Path -Path $logsDir -ChildPath ('.write-test-{0}.tmp' -f $ts)
-            Set-Content -Path $probeFile -Value 'write-test' -Encoding utf8 -ErrorAction Stop
-            Remove-Item -Path $probeFile -Force -ErrorAction SilentlyContinue
-        } catch {
-            $logsDir = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
-            Write-Warn ("Logs directory '{0}' is not writable. Falling back to '{1}'." -f $defaultLogsDir, $logsDir)
+    try {
+        if (-not (Test-Path -Path $logsDir -PathType Container)) {
+            New-Item -ItemType Directory -Path $logsDir -Force -ErrorAction Stop | Out-Null
         }
 
-        try {
-            $Global:LogFile = Join-Path -Path $logsDir -ChildPath "${ScriptName}_$ts.log"
-            "Log initialized: $Global:LogFile" | Out-File -FilePath $Global:LogFile -Encoding utf8 -ErrorAction Stop
-            if ($Version) {
-                $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-                "$timestamp | INFO | Script: $ScriptName | Version: $Version" | Out-File -FilePath $Global:LogFile -Append -Encoding utf8 -ErrorAction Stop
-            }
-        } catch {
-            $Global:LogFile = $null
-            Write-ErrorLog ("Could not initialize log file: {0}" -f $_.Exception.Message)
+        $probeFile = Join-Path -Path $logsDir -ChildPath ('.write-test-{0}.tmp' -f $ts)
+        Set-Content -Path $probeFile -Value 'write-test' -Encoding utf8 -ErrorAction Stop
+        Remove-Item -Path $probeFile -Force -ErrorAction SilentlyContinue
+    } catch {
+        $logsDir = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
+        Write-Warn ("Logs directory '{0}' is not writable. Falling back to '{1}'." -f $defaultLogsDir, $logsDir)
+    }
+
+    try {
+        $Global:LogFile = Join-Path -Path $logsDir -ChildPath "${ScriptName}_$ts.log"
+        "Log initialized: $Global:LogFile" | Out-File -FilePath $Global:LogFile -Encoding utf8 -ErrorAction Stop
+        if ($Version) {
+            $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+            "$timestamp | INFO | Script: $ScriptName | Version: $Version" | Out-File -FilePath $Global:LogFile -Append -Encoding utf8 -ErrorAction Stop
         }
+    } catch {
+        $Global:LogFile = $null
+        Write-ErrorLog ("Could not initialize log file: {0}" -f $_.Exception.Message)
     }
 }
 

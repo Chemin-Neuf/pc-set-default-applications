@@ -5,7 +5,7 @@
 
 @{
     RootModule        = 'SharedUtils.psm1'
-    ModuleVersion     = '1.0.1'
+    ModuleVersion     = '1.0.2'
     GUID              = 'eecf4c73-8eae-4295-93b1-12a329f341aa'
     Author            = 'Chemin-Neuf IT Team'
     CompanyName       = 'Chemin-Neuf'

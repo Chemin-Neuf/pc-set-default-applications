@@ -13,7 +13,8 @@
     -App shows all file and URL associations declared by a specific application.
     -Category shows all extensions of a given perceived type with their ProgIDs.
     No changes are made to the system. Use -ExportCsv with -App or -Category to
-    export findings directly. Version: see $scriptVersion in the script body.
+    export findings directly. Per-run logging follows -LogVerbosity and defaults
+    to Detailed. Version: see $scriptVersion in the script body.
 
 .PARAMETER ListApps
     Lists friendly application names resolved from each registration's Capabilities
@@ -58,8 +59,7 @@
     Controls console output level: None, Normal, or Detailed (default: Normal).
 
 .PARAMETER LogVerbosity
-    Controls log file output level: None, Normal, or Detailed (default: None).
-    This script writes no log by default as it only reads data.
+    Controls log file output level: None, Normal, or Detailed (default: Detailed).
 
 .PARAMETER Quiet
     Suppresses all console output. Takes priority over Verbosity.
@@ -153,7 +153,7 @@ param(
 
     [Parameter()]
     [ValidateSet('None', 'Normal', 'Detailed')]
-    [string]$LogVerbosity = 'None',
+    [string]$LogVerbosity = 'Detailed',
 
     [Parameter()]
     [switch]$Quiet,
@@ -165,7 +165,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '3.5.0'
+$scriptVersion = '3.6.0'
 if ($Version) {
     Write-Host ('get-application-associations.ps1  v{0}' -f $scriptVersion)
     exit 0
