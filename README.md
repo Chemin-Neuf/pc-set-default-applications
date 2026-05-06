@@ -50,6 +50,26 @@ Edit `default-applications.csv` to add your associations. Each uncommented row m
 
 `set-ucpd-service.ps1 -State Disabled` configures the UCPD service start type to Disabled and attempts to stop the running driver immediately; `-State Default` restores the Windows default (Automatic). Administrator rights are required. A reboot is normally needed for any change to take full effect.
 
+## Built-in Help
+
+Every script in this toolset includes full PowerShell comment-based help. Use `Get-Help` to read it without leaving the terminal:
+
+```powershell
+# Synopsis and syntax overview
+Get-Help .\set-default-applications.ps1
+
+# Full help including all parameters and examples
+Get-Help .\set-default-applications.ps1 -Full
+
+# Parameters only
+Get-Help .\set-default-applications.ps1 -Parameter *
+
+# Examples only
+Get-Help .\set-default-applications.ps1 -Examples
+```
+
+Replace the script name with any other script in the toolset (`get-application-associations.ps1`, `get-ucpd-status.ps1`, `set-ucpd-service.ps1`) to read its help.
+
 ## License
 
 GPL-3.0-only — see [LICENSE](LICENSE).
