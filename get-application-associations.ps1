@@ -19,7 +19,8 @@
 .PARAMETER ListApps
     Lists friendly application names resolved from each registration's Capabilities
     metadata. When several registered names belong to the same application, they
-    are grouped together in one row.
+    are grouped together in one row. With Verbosity Detailed, unresolved
+    registrations that do not have a friendly name are also included.
 
 .PARAMETER ListAppsRaw
     Lists all raw application names registered under RegisteredApplications for the
@@ -56,7 +57,9 @@
     Default: disabled. If the target file already exists, export stops with an error.
 
 .PARAMETER Verbosity
-    Controls console output level: None, Normal, or Detailed (default: Normal).
+    Controls ListApps output detail: None emits only the summary line, Normal
+    lists friendly application names, and Detailed also includes registrations
+    that do not have a friendly name. Default: Normal.
 
 .PARAMETER LogVerbosity
     Controls log file output level: None, Normal, or Detailed (default: Detailed).
@@ -71,6 +74,12 @@
     .\get-application-associations.ps1 -ListApps
 
     Lists friendly application names and the registered names behind them.
+
+.EXAMPLE
+    .\get-application-associations.ps1 -ListApps -Verbosity Detailed
+
+    Lists all application registrations, including unresolved entries whose
+    display name is still the raw registered name.
 
 .EXAMPLE
     .\get-application-associations.ps1 -ListAppsRaw
@@ -165,7 +174,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '3.6.0'
+$scriptVersion = '3.7.1'
 if ($Version) {
     Write-Host ('get-application-associations.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -250,7 +259,10 @@ function Resolve-RegisteredApplicationEntries {
     Hashtable returned by Get-RegisteredApplications.
 #>
 function Get-FriendlyRegisteredApplications {
-    param([Parameter(Mandatory=$true)][hashtable]$RegisteredApplications)
+    param(
+        [Parameter(Mandatory=$true)][hashtable]$RegisteredApplications,
+        [switch]$IncludeUnresolved
+    )
 
     $resolvedApplications = foreach ($registeredApplication in $RegisteredApplications.Values) {
         Resolve-RegisteredApplication -RegisteredApplication $registeredApplication
@@ -258,9 +270,11 @@ function Get-FriendlyRegisteredApplications {
 
     # Exclude AppX entries that did not resolve to a friendly name (DisplayName still equals
     # the raw registered name, which is an auto-generated hash starting with AppX).
-    $resolvedApplications = @($resolvedApplications | Where-Object {
-        -not ($_.RegisteredName -like 'AppX*' -and $_.DisplayName -eq $_.RegisteredName)
-    })
+    if (-not $IncludeUnresolved) {
+        $resolvedApplications = @($resolvedApplications | Where-Object {
+            -not ($_.RegisteredName -like 'AppX*' -and $_.DisplayName -eq $_.RegisteredName)
+        })
+    }
 
     $results = foreach ($group in ($resolvedApplications | Group-Object DisplayName | Sort-Object Name)) {
         [PSCustomObject]@{
@@ -437,10 +451,24 @@ if ($PSCmdlet.ParameterSetName -eq 'ListApps') {
             Write-Warning 'No registered applications found.'
             exit 0
         }
-        Write-Info ('{0} friendly application name(s) found across {1} registered entry/entries:' -f $friendlyApplications.Count, $registeredApplications.Count)
-        if ($Verbosity -ne 'None') {
-            $friendlyApplications | Format-Table -AutoSize | Out-String | Write-Host
+
+        if ($Quiet) {
+            exit 0
         }
+
+        if ($Verbosity -eq 'None') {
+            Write-Host ('{0} friendly application name(s) found across {1} registered entry/entries.' -f $friendlyApplications.Count, $registeredApplications.Count) -ForegroundColor Cyan
+            exit 0
+        }
+
+        if ($Verbosity -eq 'Detailed') {
+            $allApplications = Get-FriendlyRegisteredApplications -RegisteredApplications $registeredApplications -IncludeUnresolved
+            Write-Info ('{0} application name(s) found across {1} registered entry/entries, including unresolved registrations:' -f $allApplications.Count, $registeredApplications.Count)
+            $allApplications | Write-Output
+            exit 0
+        }
+
+        Write-Info ('{0} friendly application name(s) found across {1} registered entry/entries:' -f $friendlyApplications.Count, $registeredApplications.Count)
         $friendlyApplications | Write-Output
         exit 0
     }
@@ -555,9 +583,6 @@ if ($PSCmdlet.ParameterSetName -eq 'App') {
     }
 
     Write-Info ('{0} association(s) found for: {1}' -f $results.Count, $displayName)
-    if ($Verbosity -ne 'None') {
-        $results | Sort-Object Type, Association | Format-Table -AutoSize | Out-String | Write-Host
-    }
     $results | Sort-Object Type, Association | Write-Output
     if ($exportCsvPath) {
         $exportSucceeded = Write-AssociationCsv -Results $results -Path $exportCsvPath -Active:($exportCsvMode -eq 'Active') -Overwrite:$OverwriteCsv
@@ -608,9 +633,6 @@ if ($PSCmdlet.ParameterSetName -eq 'Category') {
     }
 
     Write-Info ('{0} extension(s) found for category: {1}' -f $results.Count, $Category)
-    if ($Verbosity -ne 'None') {
-        $results | Sort-Object Association | Format-Table -AutoSize | Out-String | Write-Host
-    }
     $results | Sort-Object Association | Write-Output
     if ($exportCsvPath) {
         $exportSucceeded = Write-AssociationCsv -Results $results -Path $exportCsvPath -Active:($exportCsvMode -eq 'Active') -Overwrite:$OverwriteCsv

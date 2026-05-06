@@ -25,6 +25,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## get-application-associations.ps1
 
+### [3.7.1] - 2026-05-06
+
+#### Fixed
+
+- `-ListApps -Verbosity None` now renders its summary line in cyan like the other summary lines, while `-Quiet` remains fully silent.
+
+### [3.7.0] - 2026-05-06
+
+#### Changed
+
+- `-ListApps` now varies its output by `Verbosity`: `None` emits only the count summary, `Normal` keeps the friendly-name listing, and `Detailed` includes unresolved application registrations that have no friendly display name.
+
+### [3.6.1] - 2026-05-06
+
+#### Fixed
+
+- Removed duplicate interactive listings in `-ListApps`, `-App`, and `-Category`. The script now emits the result objects once through the PowerShell pipeline instead of also rendering a second host-only table.
+
 ### [3.6.0] - 2026-05-06
 
 #### Changed
