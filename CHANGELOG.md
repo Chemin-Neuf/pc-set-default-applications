@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## UcpdUtils.psm1
+
+### [1.0.0] - 2026-05-06
+
+#### Added
+
+- New shared module exposing `Get-UcpdStatus` and `Set-UcpdState` for use by multiple scripts without child-process invocation.
+- `Get-UcpdStatus` returns a structured object with `IsActive`, `DriverPresent`, `ServiceRegistered`, `StartTypeLabel`, `RunningStatus`, and `IsAdmin`.
+- `Set-UcpdState` returns a structured object with `Success`, `Reason`, `RequiresReboot`, and `Message`. Never calls `exit`; callers decide how to handle results.
+
 ## get-application-associations.ps1
 
 ### [3.5.0] - 2026-05-05
@@ -40,6 +50,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## set-default-applications.ps1
 
+### [2.9.0] - 2026-05-06
+
+#### Added
+
+- UCPD-protected extensions (`.htm`, `.html`, `.pdf`, `.svg`, `.xhtml`, `.shtml`, `.webp`) and protocols (`http`, `https`) are now declared in the configuration section.
+- Before processing, if any requested association is UCPD-protected, the script checks UCPD status via `UcpdUtils.psm1` and attempts to disable it automatically (requires admin rights).
+- If UCPD cannot be disabled (no admin rights, or reboot required), protected associations are skipped and a clear error is reported at the end with the reason and required next action.
+- Imports `UcpdUtils.psm1`.
+
 ### [2.8.0] - 2026-05-05
 
 #### Changed
@@ -69,7 +88,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New read-only diagnostic script to report UCPD driver presence, service registration, configured start type, current running state, and whether the current PowerShell session is elevated.
 - Color-coded OK/WARNING/ERROR summary output and per-run logging via `SharedUtils`.
 
+## get-ucpd-status.ps1
+
+### [2.0.0] - 2026-05-06
+
+#### Changed
+
+- Refactored into a thin wrapper around `UcpdUtils.psm1`. All UCPD status logic now lives in the shared module.
+- Imports `UcpdUtils.psm1` and calls `Get-UcpdStatus`.
+
 ## set-ucpd-service.ps1
+
+### [3.0.0] - 2026-05-06
+
+#### Changed
+
+- Refactored into a thin wrapper around `UcpdUtils.psm1`. All UCPD state-change logic now lives in the shared module.
+- Imports `UcpdUtils.psm1` and calls `Set-UcpdState`.
+- Removed `-WhatIf` support (was `SupportsShouldProcess`). The underlying `Set-UcpdState` function never calls `exit`, enabling structured result handling by callers.
 
 ### [2.0.0] - 2026-05-06
 

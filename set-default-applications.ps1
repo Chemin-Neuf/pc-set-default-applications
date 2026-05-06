@@ -145,6 +145,9 @@ $setUserFTACachePath        = 'C:\Support\SetUserFTA.exe'
 $setUserFTADownloadUrl      = 'https://setuserfta.com/SetUserFTA.zip'
 $setUserFTANetworkPath      = '\\your-server\your-share\SetUserFTA.exe'
 $setUserFTAKnownFreeVersion = '1.8.4'   # latest personal/free edition — update this when a new version is released
+# UCPD-protected associations — these require UCPD to be disabled before SetUserFTA can apply them.
+$ucpdProtectedExtensions = @('.htm', '.html', '.pdf', '.svg', '.xhtml', '.shtml', '.webp')
+$ucpdProtectedProtocols  = @('http', 'https')
 
 if (-not $ConfigPath) {
     if ($ConfigType -eq 'TXT') {
@@ -208,6 +211,13 @@ if (-not (Test-Path $appRegistryPath)) {
     exit 1
 }
 Import-Module $appRegistryPath -Force
+
+$ucpdUtilsPath = Join-Path $PSScriptRoot 'UcpdUtils.psm1'
+if (-not (Test-Path $ucpdUtilsPath)) {
+    Write-Error ('UcpdUtils.psm1 not found at: {0}' -f $ucpdUtilsPath)
+    exit 1
+}
+Import-Module $ucpdUtilsPath -Force
 
 # ============================================================
 # LOGGING
@@ -644,6 +654,58 @@ $countSuccess = 0
 $countWarning = 0
 $countError   = 0
 
+# ---- UCPD pre-check ----
+# Determine whether any requested association is UCPD-protected.
+$requestedUcpdAssociations = $associations | Where-Object {
+    $a = $_.Association.Trim()
+    ($ucpdProtectedExtensions -contains $a) -or ($ucpdProtectedProtocols -contains $a)
+}
+
+$ucpdStillActive   = $false
+$ucpdReasonMessage = ''
+$ucpdNextAction    = ''
+
+if ($requestedUcpdAssociations) {
+    Write-Info ('UCPD-protected associations requested ({0}). Checking UCPD status...' -f (($requestedUcpdAssociations | ForEach-Object { $_.Association.Trim() }) -join ', '))
+    $ucpdStatus = Get-UcpdStatus
+
+    if ($ucpdStatus.IsActive) {
+        Write-Warn 'UCPD is active. Attempting to disable it so protected associations can be applied...'
+
+        if (-not $ucpdStatus.IsAdmin) {
+            $ucpdStillActive   = $true
+            $ucpdReasonMessage = 'UCPD is active and this session does not have administrator rights. Protected associations cannot be applied.'
+            $ucpdNextAction    = 'Re-run this script from an elevated PowerShell prompt (Run as administrator).'
+            Write-Warn $ucpdReasonMessage
+        }
+        else {
+            $disableResult = Set-UcpdState -State Disabled
+
+            if (-not $disableResult.Success) {
+                $ucpdStillActive   = $true
+                $ucpdReasonMessage = ('Failed to disable UCPD: {0}' -f $disableResult.Message)
+                $ucpdNextAction    = 'Check the log for details and retry from an elevated prompt.'
+                Write-Warn $ucpdReasonMessage
+            }
+            elseif ($disableResult.RequiresReboot) {
+                $ucpdStillActive   = $true
+                $ucpdReasonMessage = 'UCPD was configured as Disabled but the driver is still running and requires a reboot to stop.'
+                $ucpdNextAction    = 'Reboot this computer, then re-run the script.'
+                Write-Warn ('UCPD disabled in configuration but driver is still running: {0}' -f $disableResult.Message)
+            }
+            else {
+                Write-Success 'UCPD disabled and driver stopped. Protected associations will now be applied.'
+            }
+        }
+    }
+    else {
+        Write-Info 'UCPD is not active. Protected associations will be applied normally.'
+    }
+}
+
+# ---- Association loop ----
+$ucpdSkippedAssociations = [System.Collections.Generic.List[string]]::new()
+
 foreach ($row in $associations) {
     $association = $row.Association.Trim()
     $application = $row.Application.Trim()
@@ -658,6 +720,17 @@ foreach ($row in $associations) {
         Write-Warn ('Skipping ''{0}'' from ''{1}'' because no application is specified.' -f $association, $row.SourcePath)
         $countWarning++
         continue
+    }
+
+    # Skip UCPD-protected associations when UCPD is still active
+    if ($ucpdStillActive) {
+        $isProtected = ($ucpdProtectedExtensions -contains $association) -or ($ucpdProtectedProtocols -contains $association)
+        if ($isProtected) {
+            Write-Warn ('Skipping UCPD-protected association ''{0}'' because UCPD is still active.' -f $association)
+            $ucpdSkippedAssociations.Add($association)
+            $countWarning++
+            continue
+        }
     }
 
     $progID = Resolve-ProgIDForApplicationAssociation -Association $association -Application $application -ApplicationMap $applicationMap
@@ -685,6 +758,13 @@ foreach ($row in $associations) {
 
 # Summary
 Write-Info ('Completed. Success: {0} | Warnings: {1} | Errors: {2}' -f $countSuccess, $countWarning, $countError)
+
+if ($ucpdStillActive -and $ucpdSkippedAssociations.Count -gt 0) {
+    Write-ErrorLog ('The following UCPD-protected associations were skipped because UCPD is still active: {0}' -f ($ucpdSkippedAssociations -join ', '))
+    Write-ErrorLog ('Reason: {0}' -f $ucpdReasonMessage)
+    Write-ErrorLog ('Next action: {0}' -f $ucpdNextAction)
+    $countError++
+}
 
 if ($countError -gt 0) {
     exit 1
