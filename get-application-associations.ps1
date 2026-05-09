@@ -24,7 +24,8 @@
 
 .PARAMETER ListAppsRaw
     Lists all raw application names registered under RegisteredApplications for the
-    current user and the local machine.
+    current user and the local machine. With Verbosity Detailed, the resolved
+    application name is also shown for each raw registration.
     These names can be used as input to -App.
 
 .PARAMETER ListCategories
@@ -57,12 +58,17 @@
     Default: disabled. If the target file already exists, export stops with an error.
 
 .PARAMETER Verbosity
-    Controls ListApps output detail: None emits only the summary line, Normal
-    lists friendly application names, and Detailed also includes registrations
-    that do not have a friendly name. Default: Normal.
+    Controls ListApps output detail: None suppresses console list output,
+    Normal lists friendly application names, and Detailed also includes
+    registrations that do not have a friendly name. For ListAppsRaw, None
+    suppresses console list output, Normal lists raw registered names, and
+    Detailed also shows the resolved application name. Default: Normal.
 
 .PARAMETER LogVerbosity
     Controls log file output level: None, Normal, or Detailed (default: Detailed).
+    For ListApps, Normal logs the friendly-name listing and Detailed also logs
+    registrations that do not have a friendly name. For ListAppsRaw, Normal logs
+    raw registered names and Detailed also logs the resolved application name.
 
 .PARAMETER Quiet
     Suppresses all console output. Takes priority over Verbosity.
@@ -82,9 +88,21 @@
     display name is still the raw registered name.
 
 .EXAMPLE
+    .\get-application-associations.ps1 -ListApps -LogVerbosity Detailed -Quiet
+
+    Writes the full ListApps inventory, including unresolved registrations, to
+    the logfile without printing the list to the console.
+
+.EXAMPLE
     .\get-application-associations.ps1 -ListAppsRaw
 
     Lists all raw registered application names.
+
+.EXAMPLE
+    .\get-application-associations.ps1 -ListAppsRaw -Verbosity Detailed
+
+    Lists all raw registered application names with their resolved application
+    names.
 
 .EXAMPLE
     .\get-application-associations.ps1 -ListCategories
@@ -174,7 +192,7 @@ param(
 # ============================================================
 # VERSION
 # ============================================================
-$scriptVersion = '3.7.1'
+$scriptVersion = '3.9.0'
 if ($Version) {
     Write-Host ('get-application-associations.ps1  v{0}' -f $scriptVersion)
     exit 0
@@ -305,6 +323,74 @@ function Get-FriendlyRegisteredApplications {
     }
 
     return @($results)
+}
+
+<#
+.SYNOPSIS
+    Writes ListApps rows to the logfile.
+
+.PARAMETER Applications
+    Collection of objects with Application and RegisteredApplications properties.
+#>
+function Write-RegisteredApplicationListLog {
+    param([Parameter(Mandatory=$true)]$Applications)
+
+    if ($Global:LogVerbosity -eq 'None') { return }
+
+    foreach ($application in ($Applications | Sort-Object Application)) {
+        Write-Log -Message ('Application: {0} | RegisteredApplications: {1}' -f $application.Application, $application.RegisteredApplications) -Level 'INFO'
+    }
+}
+
+<#
+.SYNOPSIS
+    Returns raw registered application entries with resolved application names.
+
+.PARAMETER RegisteredApplications
+    Hashtable returned by Get-RegisteredApplications.
+#>
+function Get-RawRegisteredApplicationsDetails {
+    param([Parameter(Mandatory=$true)][hashtable]$RegisteredApplications)
+
+    $results = foreach ($registeredName in ($RegisteredApplications.Keys | Sort-Object)) {
+        $resolvedApplication = Resolve-RegisteredApplication -RegisteredApplication $RegisteredApplications[$registeredName]
+        [PSCustomObject]@{
+            RegisteredApplication = $resolvedApplication.RegisteredName
+            Application           = Resolve-EffectiveFriendlyName -DisplayName $resolvedApplication.DisplayName -RegisteredApplications $RegisteredApplications
+        }
+    }
+
+    return @($results)
+}
+
+<#
+.SYNOPSIS
+    Writes ListAppsRaw rows to the logfile.
+
+.PARAMETER RegisteredApplications
+    Collection of raw registered application names or objects.
+
+.PARAMETER IncludeResolvedName
+    When set, log rows include the resolved application name.
+#>
+function Write-RawRegisteredApplicationListLog {
+    param(
+        [Parameter(Mandatory=$true)]$RegisteredApplications,
+        [switch]$IncludeResolvedName
+    )
+
+    if ($Global:LogVerbosity -eq 'None') { return }
+
+    if ($IncludeResolvedName) {
+        foreach ($application in ($RegisteredApplications | Sort-Object RegisteredApplication)) {
+            Write-Log -Message ('RegisteredApplication: {0} | Application: {1}' -f $application.RegisteredApplication, $application.Application) -Level 'INFO'
+        }
+        return
+    }
+
+    foreach ($registeredApplication in ($RegisteredApplications | Sort-Object)) {
+        Write-Log -Message ('RegisteredApplication: {0}' -f $registeredApplication) -Level 'INFO'
+    }
 }
 
 <#
@@ -452,24 +538,50 @@ if ($PSCmdlet.ParameterSetName -eq 'ListApps') {
             exit 0
         }
 
+        $allApplications = $null
+        if ($Verbosity -eq 'Detailed' -or $Global:LogVerbosity -eq 'Detailed') {
+            $allApplications = Get-FriendlyRegisteredApplications -RegisteredApplications $registeredApplications -IncludeUnresolved
+        }
+
+        $consoleSummary = ('{0} friendly application name(s) found across {1} registered entry/entries:' -f $friendlyApplications.Count, $registeredApplications.Count)
+        $consoleApplications = $friendlyApplications
+
+        if ($Verbosity -eq 'Detailed') {
+            $consoleSummary = ('{0} application name(s) found across {1} registered entry/entries, including unresolved registrations:' -f $allApplications.Count, $registeredApplications.Count)
+            $consoleApplications = $allApplications
+        }
+
+        $logSummary = ('{0} friendly application name(s) found across {1} registered entry/entries:' -f $friendlyApplications.Count, $registeredApplications.Count)
+        $logApplications = $friendlyApplications
+
+        if ($Global:LogVerbosity -eq 'Detailed') {
+            $logSummary = ('{0} application name(s) found across {1} registered entry/entries, including unresolved registrations:' -f $allApplications.Count, $registeredApplications.Count)
+            $logApplications = $allApplications
+        }
+
         if ($Quiet) {
+            if ($Global:LogVerbosity -ne 'None') {
+                Write-Log -Message $logSummary -Level 'INFO'
+                Write-RegisteredApplicationListLog -Applications $logApplications
+            }
             exit 0
         }
 
         if ($Verbosity -eq 'None') {
-            Write-Host ('{0} friendly application name(s) found across {1} registered entry/entries.' -f $friendlyApplications.Count, $registeredApplications.Count) -ForegroundColor Cyan
+            if ($Global:LogVerbosity -ne 'None') {
+                Write-Log -Message $logSummary -Level 'INFO'
+                Write-RegisteredApplicationListLog -Applications $logApplications
+            }
             exit 0
         }
 
-        if ($Verbosity -eq 'Detailed') {
-            $allApplications = Get-FriendlyRegisteredApplications -RegisteredApplications $registeredApplications -IncludeUnresolved
-            Write-Info ('{0} application name(s) found across {1} registered entry/entries, including unresolved registrations:' -f $allApplications.Count, $registeredApplications.Count)
-            $allApplications | Write-Output
-            exit 0
+        Write-Host $consoleSummary -ForegroundColor Cyan
+        if ($Global:LogVerbosity -ne 'None') {
+            Write-Log -Message $logSummary -Level 'INFO'
+            Write-RegisteredApplicationListLog -Applications $logApplications
         }
 
-        Write-Info ('{0} friendly application name(s) found across {1} registered entry/entries:' -f $friendlyApplications.Count, $registeredApplications.Count)
-        $friendlyApplications | Write-Output
+        $consoleApplications | Write-Output
         exit 0
     }
 
@@ -478,8 +590,47 @@ if ($PSCmdlet.ParameterSetName -eq 'ListApps') {
         Write-Warning 'No registered applications found.'
         exit 0
     }
-    Write-Info ('{0} registered application(s):' -f @($names).Count)
-    $names | Write-Output
+
+    $detailedNames = $null
+    if ($Verbosity -eq 'Detailed' -or $Global:LogVerbosity -eq 'Detailed') {
+        $detailedNames = Get-RawRegisteredApplicationsDetails -RegisteredApplications $registeredApplications
+    }
+
+    $consoleSummary = ('{0} registered application(s):' -f @($names).Count)
+    $consoleRegisteredApplications = $names
+    $consoleIncludeResolvedName = $false
+
+    if ($Verbosity -eq 'Detailed') {
+        $consoleSummary = ('{0} registered application(s) with resolved application names:' -f @($detailedNames).Count)
+        $consoleRegisteredApplications = $detailedNames
+        $consoleIncludeResolvedName = $true
+    }
+
+    $logSummary = ('{0} registered application(s):' -f @($names).Count)
+    $logRegisteredApplications = $names
+    $logIncludeResolvedName = $false
+
+    if ($Global:LogVerbosity -eq 'Detailed') {
+        $logSummary = ('{0} registered application(s) with resolved application names:' -f @($detailedNames).Count)
+        $logRegisteredApplications = $detailedNames
+        $logIncludeResolvedName = $true
+    }
+
+    if ($Quiet -or $Verbosity -eq 'None') {
+        if ($Global:LogVerbosity -ne 'None') {
+            Write-Log -Message $logSummary -Level 'INFO'
+            Write-RawRegisteredApplicationListLog -RegisteredApplications $logRegisteredApplications -IncludeResolvedName:$logIncludeResolvedName
+        }
+        exit 0
+    }
+
+    Write-Host $consoleSummary -ForegroundColor Cyan
+    if ($Global:LogVerbosity -ne 'None') {
+        Write-Log -Message $logSummary -Level 'INFO'
+        Write-RawRegisteredApplicationListLog -RegisteredApplications $logRegisteredApplications -IncludeResolvedName:$logIncludeResolvedName
+    }
+
+    $consoleRegisteredApplications | Write-Output
     exit 0
 }
 

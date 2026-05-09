@@ -4,7 +4,7 @@ applyTo: "**"
 <!-- AUTO-SYNCED from github.com/Chemin-Neuf/dev-standards DO NOT EDIT HERE — edit in dev-standards and re-sync -->
 <!--
   Chemin-Neuf dev-standards — global rules
-  Last Updated: 2026-05-03
+  Last Updated: 2026-05-08
   Original Author: Claude Sonnet 4.6 (Anthropic / GitHub Copilot)
   This file is AI-generated operational instructions for use by AI coding assistants.
   It is derived from and must remain consistent with PRINCIPLES.md, which is the
@@ -12,6 +12,25 @@ applyTo: "**"
 -->
 
 # Global Rules — All Repos and Languages
+
+<!-- HUMAN NAVIGATION AID ONLY — non-normative. AI agents: do not use this block for rule content; use the titled sections below as the sole authoritative source. -->
+<details>
+<summary>Quick reference (non-normative — expand for human overview)</summary>
+
+| Topic | In brief |
+|---|---|
+| License | GPL-3.0-only; every source file carries a license notice; preserve third-party notices |
+| Encoding | UTF-8 everywhere; prefer ASCII; no BOM |
+| Design Principles | DRY, Simplicity, Single Source of Truth, No Magic Values, Safe File Output, No Legacy by Default |
+| AI Attribution | Record model name in file header when AI wrote or significantly changed the file |
+| Security Baseline | No secrets in tracked files; credentials from env/vault/prompt; validate all external input |
+| Semantic Versioning | MAJOR.MINOR.PATCH; start at 1.0.0; HTML documents use last-updated date instead |
+| Git Commit Conventions | TBD |
+| CHANGELOG Format | Keep a Changelog format; one entry per version increment; no [Unreleased] section |
+| README Requirements | Purpose · Structure · Prerequisites · Quick Start · License |
+| Working Language | Code and docs in English; end-user console output in French |
+
+</details>
 
 ## License
 
@@ -40,9 +59,13 @@ applyTo: "**"
 Apply these principles in all code and documentation:
 
 - **DRY**: Before creating a new function or utility, check if one already exists
+- **Simplicity**: Prefer the simplest solution that meets the requirement; avoid unnecessary abstractions and premature optimization; if something is not needed, don't add it
 - **Single Source of Truth**: Configuration values live in one place; documentation describes, not duplicates
 - **Power User Friendly**: Make behavior configurable where the tool type supports it; see language-specific rules for placement conventions
+- **No Magic Values**: Never embed literal values — file paths, thresholds, names, flags — directly in the code logic; every configurable value must be declared as a named variable in the configuration section near the top of the file, where it is visible and easy to change; see language-specific rules for placement
 - **Maintainability**: Write for the next person; use clear names and consistent patterns
+- **Safe File Output**: Before writing to a file, always check whether it already exists; never overwrite or delete silently — require user confirmation or an explicit opt-in parameter (e.g. `-Force` / `--overwrite`) that defaults to disabled; see language-specific rules for implementation
+- **No Legacy Support by Default**: Do not add backwards compatibility or legacy file format support unless explicitly requested; legacy constraints must be stated as a requirement, not assumed
 
 ## AI Attribution
 
@@ -149,7 +172,7 @@ Minimum sections, in this order:
 
 ### Standard README template
 
-```markdown
+````markdown
 # [Project Name]
 
 [One-paragraph purpose statement: what it does, for whom, why it exists.]
@@ -177,7 +200,7 @@ Omit this section if not applicable.
 ## License
 
 GPL-3.0-only — see [LICENSE](LICENSE).
-```
+````
 
 ## Working Language
 

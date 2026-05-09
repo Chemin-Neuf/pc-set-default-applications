@@ -25,6 +25,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## get-application-associations.ps1
 
+### [3.9.0] - 2026-05-06
+
+#### Changed
+
+- `-ListAppsRaw` now follows the same `Verbosity` and `LogVerbosity` split as `-ListApps`: `None` is silent on the console, `Normal` lists raw registered names, and `Detailed` also shows or logs the resolved application name for each registration.
+
+### [3.8.1] - 2026-05-06
+
+#### Fixed
+
+- `-ListApps -Verbosity None` is now fully silent on the console. It no longer prints a summary line; logfile output remains controlled independently by `LogVerbosity`.
+
+### [3.8.0] - 2026-05-06
+
+#### Changed
+
+- `LogVerbosity` now controls `-ListApps` logfile detail independently of console verbosity: `Normal` logs the friendly-name list, while `Detailed` also logs unresolved application registrations.
+
 ### [3.7.1] - 2026-05-06
 
 #### Fixed
